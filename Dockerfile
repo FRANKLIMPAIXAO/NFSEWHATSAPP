@@ -8,7 +8,9 @@ FROM node:20-alpine AS builder
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev
+# npm install (em vez de npm ci) — repo ainda não tem package-lock.json.
+# Quando o lock for gerado e commitado, trocar de volta pra `npm ci` (mais determinístico).
+RUN npm install --omit=dev --no-audit --no-fund
 
 
 FROM node:20-alpine
