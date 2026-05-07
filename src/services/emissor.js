@@ -131,10 +131,25 @@ export async function emitirNFSe({
             // EPN exige endereço completo do tomador quando ele é identificado.
             // O extractor pede CEP+número do usuário; aqui completamos via ViaCEP.
             const tomadorCompleto = await completarEnderecoTomador(tomador);
-            if (tomadorCompleto.documento && !tomadorCompleto.endereco?.cep) {
-                throw new Error(
-                    `Tomador identificado (${tomadorCompleto.documento}) sem endereço — EPN exige CEP do tomador.`
-                );
+            if (tomadorCompleto.documento) {
+                const e = tomadorCompleto.endereco || {};
+                const obrigatorios = {
+                    cep: e.cep,
+                    numero: e.numero,
+                    logradouro: e.logradouro,
+                    bairro: e.bairro,
+                    "ibge/municipio": e.ibge || e.cMun,
+                    uf: e.uf,
+                };
+                const ausentes = Object.entries(obrigatorios)
+                    .filter(([, v]) => !v || String(v).trim() === "")
+                    .map(([k]) => k);
+                if (ausentes.length) {
+                    throw new Error(
+                        `Endereço do tomador incompleto (faltando: ${ausentes.join(", ")}). ` +
+                            `Pede o CEP e número do cliente — o resto resolve via ViaCEP.`
+                    );
+                }
             }
 
             const { response } = await emitirEpn({
