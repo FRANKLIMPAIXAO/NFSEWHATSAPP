@@ -7,6 +7,9 @@ import express from "express";
 import { timingSafeEqual } from "node:crypto";
 import { handleWebhook } from "./handlers/webhook.js";
 import { logger } from "./utils/logger.js";
+import { restoreCertsFromEnv } from "./utils/restore-certs.js";
+
+restoreCertsFromEnv();
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
