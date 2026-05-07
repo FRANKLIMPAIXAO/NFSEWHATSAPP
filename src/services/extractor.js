@@ -5,6 +5,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { EXTRACTOR_SYSTEM_PROMPT } from "../prompts/extractor.js";
 import { resolverCep } from "./viacep.js";
+import { consultarCnpj } from "./cnpj-lookup.js";
 import { logger } from "../utils/logger.js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -56,11 +57,57 @@ export async function extrairCampos(texto, payloadAnterior = null) {
 
         const data = JSON.parse(raw);
 
-        // Pós-processamento: se o LLM extraiu CEP do tomador, resolve via ViaCEP
+        // Pós-processamento PJ: se o tomador é pessoa jurídica e tem CNPJ,
+        // consulta a BrasilAPI pra obter razão social + endereço completo.
+        // Isso elimina a necessidade de o usuário informar endereço pra PJs
+        // (basta o CNPJ) e remove dependência de "alucinação" do LLM pros
+        // dados cadastrais.
+        if (data.tomador?.tipo === "PJ" && data.tomador?.documento) {
+            const cnpjLimpo = String(data.tomador.documento).replace(/\D/g, "");
+            if (cnpjLimpo.length === 14) {
+                const dadosCnpj = await consultarCnpj(cnpjLimpo);
+                if (dadosCnpj) {
+                    data.tomador.razao_social =
+                        data.tomador.razao_social || dadosCnpj.razao_social;
+                    data.tomador.endereco = {
+                        cep: dadosCnpj.cep,
+                        numero: dadosCnpj.numero || "S/N",
+                        logradouro: dadosCnpj.logradouro,
+                        bairro: dadosCnpj.bairro,
+                        municipio: dadosCnpj.municipio,
+                        uf: dadosCnpj.uf,
+                        ibge: dadosCnpj.ibge,
+                        complemento: dadosCnpj.complemento || null,
+                    };
+                    if (!dadosCnpj.ativa) {
+                        data.observacoes =
+                            (data.observacoes ? data.observacoes + " | " : "") +
+                            `CNPJ situação: ${dadosCnpj.situacao_cadastral}`;
+                    }
+                    // Garante que campos_faltantes não exija endereço (já temos)
+                    data.campos_faltantes = (data.campos_faltantes || []).filter(
+                        (c) => c !== "endereco_tomador"
+                    );
+                    if (data.status === "incomplete" && data.campos_faltantes.length === 0) {
+                        data.status = "ok";
+                    }
+                } else {
+                    // CNPJ não encontrado → marca incomplete pra usuário corrigir
+                    data.status = "incomplete";
+                    data.campos_faltantes = [
+                        ...(data.campos_faltantes || []),
+                        "cnpj_invalido",
+                    ];
+                    data.resumo_confirmacao = `CNPJ ${cnpjLimpo} não encontrado na Receita Federal. Pode confirmar o CNPJ?`;
+                }
+            }
+        }
+
+        // Pós-processamento PF: se o LLM extraiu CEP do tomador, resolve via ViaCEP
         // pra completar logradouro/bairro/município/UF/IBGE de forma confiável
         // (sem depender do LLM "alucinar" esses campos). Se o CEP for inválido,
         // marca como incomplete e devolve mensagem clara pro usuário corrigir.
-        if (data.tomador?.documento && data.tomador?.endereco?.cep) {
+        if (data.tomador?.tipo !== "PJ" && data.tomador?.documento && data.tomador?.endereco?.cep) {
             const cep = String(data.tomador.endereco.cep).replace(/\D/g, "");
             const dadosCep = await resolverCep(cep);
             if (dadosCep) {
