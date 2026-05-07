@@ -43,9 +43,43 @@ ensureColumn("empresas", "emissor", "TEXT NOT NULL DEFAULT 'focus'");
 // =============================================================
 // EMPRESAS
 // =============================================================
-export const findEmpresaByWhatsapp = db.prepare(
+const findEmpresaByWhatsappStmt = db.prepare(
     "SELECT * FROM empresas WHERE whatsapp_dono = ? AND ativa = 1"
 );
+
+// WhatsApp Cloud API ora entrega celular brasileiro com o "nono dígito"
+// (5562 9 8642-9305 → 13 chars), ora sem (5562 8642-9305 → 12 chars).
+// Geramos as variantes do número e tentamos cada uma — assim o cadastro
+// funciona independente do formato que a operadora/Meta entrega no momento.
+export function variantesNumeroBr(numero) {
+    if (!numero) return [];
+    const variants = new Set([numero]);
+    // 12 chars: 55 + DDD(2) + 8 dígitos → adiciona o 9 após o DDD
+    if (/^55\d{10}$/.test(numero)) {
+        variants.add(numero.slice(0, 4) + "9" + numero.slice(4));
+    }
+    // 13 chars: 55 + DDD(2) + 9 + 8 dígitos → remove o 9 após o DDD
+    if (/^55\d{2}9\d{8}$/.test(numero)) {
+        variants.add(numero.slice(0, 4) + numero.slice(5));
+    }
+    return [...variants];
+}
+
+export function mesmoNumeroBr(a, b) {
+    if (!a || !b) return false;
+    const va = variantesNumeroBr(a);
+    return va.includes(b) || variantesNumeroBr(b).some((x) => va.includes(x));
+}
+
+export const findEmpresaByWhatsapp = {
+    get(numero) {
+        for (const variant of variantesNumeroBr(numero)) {
+            const row = findEmpresaByWhatsappStmt.get(variant);
+            if (row) return row;
+        }
+        return undefined;
+    },
+};
 
 export const findEmpresaById = db.prepare(
     "SELECT * FROM empresas WHERE id = ?"

@@ -22,6 +22,7 @@ import {
     finalizarConversa,
     registrarMensagemProcessada,
     logEvento,
+    mesmoNumeroBr,
 } from "../db/index.js";
 import { transcrever } from "../services/whisper.js";
 import { extrairCampos } from "../services/extractor.js";
@@ -73,7 +74,7 @@ export async function handleWebhook(evt) {
     // ---------- 1. TRATAMENTO ESPECIAL: APROVAÇÃO ADMIN ----------
     // Precisa vir ANTES da identificação de empresa: o admin pode não ter
     // empresa cadastrada com o próprio número.
-    if (numero === ADMIN_WHATSAPP && texto) {
+    if (mesmoNumeroBr(numero, ADMIN_WHATSAPP) && texto) {
         const tratado = await tratarRespostaAdmin(texto);
         if (tratado) return;
     }
