@@ -174,12 +174,74 @@ Colunas: `id, message_id, numero, tipo, criado_em` (não `processada_em` — peq
 
 ## Checklist pós-deploy
 
-- [ ] Rebuild da imagem no EasyPanel (pra subir os edits do código)
-- [ ] Confirmar que `/app/certs/roca.p12` tem 8791 bytes após restart
-- [ ] Validar cert via `loadPfx` (script no passo 4)
+- [x] Rebuild da imagem no EasyPanel (pra subir os edits do código)
+- [x] Validar cert via `loadPfx` (script no passo 4)
+- [x] Confirmar fluxo: empresa achada, CPF pedido, confirmação SIM
+- [ ] Confirmar que `restoreCertsFromEnv` regrava `/app/certs/roca.p12` automaticamente no boot do próximo deploy
 - [ ] Testar emissão direta: `node scripts/teste-emissao-roca-epn.js`
-- [ ] Testar fluxo completo via WhatsApp: enviar áudio/texto → confirmar → admin aprova → nota emitida
-- [ ] Migrar cert pra volume persistente (`/app/certs`) e remover env var
+- [ ] Repetir fluxo completo via WhatsApp: enviar áudio/texto → confirmar → admin aprova → **PDF da nota recebido**
+- [ ] (Opcional) Migrar cert pra volume persistente (`/app/certs`) e remover env var
+
+---
+
+## Problema 3 — Cert sumiu após redeploy (`ENOENT: /app/certs/roca.p12`)
+
+### Sintoma
+Após o push do fix do nono dígito (commit `7c637fb`), o redeploy automático
+do EasyPanel reconstruiu a imagem e o fluxo no WhatsApp progrediu até a
+confirmação ("Sim"). Mas a emissão falhou:
+
+```
+Erro técnico (ROCA LTDA): ENOENT: no such file or directory, open '/app/certs/roca.p12'
+```
+
+### Causa raiz
+`/app/certs` no EasyPanel **não é volume persistente** — todo redeploy reconstrói
+o filesystem. O `.p12` que tínhamos colocado manualmente no console
+(extraindo da env var `ROCA_CERT_PFX_BASE64`) sumiu junto.
+
+A env var continua existindo, mas ninguém regrava o arquivo após o restart.
+
+### Solução aplicada — restore automático no boot (commit `aa6a463`)
+
+Novo módulo [src/utils/restore-certs.js](agent-nfse/src/utils/restore-certs.js)
+chamado uma vez em [src/server.js:8-10](agent-nfse/src/server.js:8) antes do
+`app.listen()`.
+
+Lógica:
+
+1. Lê todas as empresas com `cert_pfx_path` setado.
+2. Para cada uma, verifica se o arquivo existe em disco.
+3. Se NÃO existe, deriva o nome da env var do basename do path:
+   `/app/certs/roca.p12` → `ROCA_CERT_PFX_BASE64`.
+4. Se a env var existe, decodifica o base64 e grava o `.p12` com perm `600`.
+5. Se não existe, loga `warn` (operador sabe imediatamente que falta env var).
+
+Convenção é genérica: cadastrar nova empresa com `cert_pfx_path` setado e adicionar
+a env var correspondente — o restore acontece sozinho no próximo deploy.
+
+### Status
+- [x] Módulo criado, importado no `server.js`, push em `main`
+- [ ] Rebuild no EasyPanel pra ativar (auto-deploy deve disparar)
+- [ ] Confirmar nos logs do container que a mensagem `certs restaurados de env vars no boot` aparece após o boot
+
+### Quick fix imediato (enquanto aguarda rebuild)
+Pra desbloquear o teste agora sem esperar o auto-deploy:
+
+```bash
+node -e "require('fs').writeFileSync('/app/certs/roca.p12',Buffer.from(process.env.ROCA_CERT_PFX_BASE64.replace(/\s+/g,''),'base64'));require('fs').chmodSync('/app/certs/roca.p12',0o600);console.log('OK',require('fs').statSync('/app/certs/roca.p12').size,'bytes')"
+```
+
+Manda "Sim" no WhatsApp em seguida.
+
+---
+
+## Resumo de commits desta sessão
+
+| Hash | Descrição |
+|---|---|
+| `7c637fb` | fix(webhook): normaliza nono dígito do celular brasileiro na busca de empresa |
+| `aa6a463` | feat(boot): restaura .p12 ausente a partir de env var no startup |
 
 ---
 
