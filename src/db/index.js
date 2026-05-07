@@ -34,6 +34,11 @@ function ensureColumn(table, column, definition) {
     }
 }
 ensureColumn("empresas", "inscricao_municipal", "TEXT");
+// Certificado A1 (.pfx/.p12) — necessário pra emissão direta na API do EPN.
+ensureColumn("empresas", "cert_pfx_path", "TEXT");
+ensureColumn("empresas", "cert_pfx_password", "TEXT");
+// Emissor: 'focus' (default, via Focus NFe) ou 'epn' (direto na SEFAZ Nacional)
+ensureColumn("empresas", "emissor", "TEXT NOT NULL DEFAULT 'focus'");
 
 // =============================================================
 // EMPRESAS

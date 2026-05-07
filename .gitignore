@@ -1,5 +1,8 @@
 node_modules/
 data/
+certs/
+*.pfx
+*.p12
 *.db
 *.db-wal
 *.db-shm
@@ -12,3 +15,6 @@ data/
 .claude/
 .vscode/
 .idea/
+
+# Schema dump do Supabase do Pac no Bolso — info interna, regerar se preciso
+docs/supabase-openapi.json

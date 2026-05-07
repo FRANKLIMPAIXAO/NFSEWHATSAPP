@@ -2,25 +2,46 @@
  * src/services/focusnfe.js
  * Cliente da API Focus NFe — emissão e consulta de NFS-e.
  *
- * Doc oficial: https://focusnfe.com.br/doc/#nfse
+ * Suporta dois padrões:
+ *   - NFS-e Municipal (ABRASF, ISSNet, etc) — endpoint /v2/nfse  (payload aninhado)
+ *   - NFS-e Nacional (padrão unificado CGSN/União) — endpoint /v2/nfsen (payload flat, DPS)
  *
- * IMPORTANTE: a Focus NFe usa REFERÊNCIA pra idempotência. Cada emissão
- * precisa de uma referência única (UUID ou similar). Se você reenviar com
- * a mesma referência, ela retorna o status da emissão anterior.
+ * Escolhe baseado em empresa.usa_nfse_nacional ou env FOCUS_NFE_PADRAO=nacional|municipal.
  */
 import { logger } from "../utils/logger.js";
 
 const ENV = process.env.FOCUS_NFE_ENV || "homologacao";
+const PADRAO_DEFAULT = process.env.FOCUS_NFE_PADRAO || "nacional";
 const BASE_URL =
     ENV === "producao"
         ? process.env.FOCUS_NFE_BASE_URL_PRODUCAO || "https://api.focusnfe.com.br"
         : process.env.FOCUS_NFE_BASE_URL_HOMOLOGACAO ||
           "https://homologacao.focusnfe.com.br";
 
-/**
- * Faz chamada autenticada à Focus NFe.
- * Auth: HTTP Basic com token como user e senha em branco.
- */
+function resolverPadrao(empresa) {
+    if (empresa && typeof empresa.usa_nfse_nacional !== "undefined") {
+        return empresa.usa_nfse_nacional ? "nacional" : "municipal";
+    }
+    return PADRAO_DEFAULT;
+}
+
+function basePathPara(padrao) {
+    return padrao === "nacional" ? "/v2/nfsen" : "/v2/nfse";
+}
+
+// "14.01" → "140100" | "1401" → "140100" | "14.01.00" → "140100"
+function codigoServico6Digitos(codigo) {
+    const d = String(codigo || "").replace(/\D/g, "");
+    return d.padEnd(6, "0").slice(0, 6);
+}
+
+// Data/hora atual em horário de Brasília com TZD -03:00.
+// SEFAZ rejeita Z (interpreta como futuro). BRT explícito é seguro.
+function agoraBrtIso() {
+    const localBrt = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    return localBrt.toISOString().slice(0, 19) + "-03:00";
+}
+
 async function focusFetch(method, path, token, body) {
     const url = `${BASE_URL}${path}`;
     const auth = Buffer.from(`${token}:`).toString("base64");
@@ -44,7 +65,7 @@ async function focusFetch(method, path, token, body) {
 
     if (!response.ok) {
         const err = new Error(
-            `Focus ${response.status}: ${data.mensagem || text}`
+            `Focus ${response.status}: ${data.mensagem || data.erros?.[0]?.mensagem || text}`
         );
         err.status = response.status;
         err.data = data;
@@ -54,26 +75,7 @@ async function focusFetch(method, path, token, body) {
     return data;
 }
 
-/**
- * Emite NFS-e na Focus NFe.
- *
- * @param {Object} params
- * @param {string} params.referencia - identificador único da nota
- * @param {Object} params.empresa - empresa cadastrada (prestador)
- * @param {Object} params.tomador - {tipo, documento, razao_social}
- * @param {Object} params.servico - {descricao, codigo_lc116, valor_total}
- * @param {string} params.competencia - YYYY-MM-DD
- * @returns {Promise<Object>} resposta da Focus
- */
-export async function emitirNFSe({
-    referencia,
-    empresa,
-    tomador,
-    servico,
-    competencia,
-}) {
-    // Monta payload no schema da Focus NFe NFS-e
-    // Doc: https://focusnfe.com.br/doc/#emissao-de-nfse
+function montarPayloadMunicipal({ referencia, empresa, tomador, servico, competencia }) {
     let inscricaoMunicipal = empresa.inscricao_municipal || null;
     if (!inscricaoMunicipal && empresa.endereco_json) {
         try {
@@ -82,8 +84,15 @@ export async function emitirNFSe({
         } catch {}
     }
 
-    const payload = {
-        data_emissao: `${competencia}T12:00:00`,
+    const optanteSimples = empresa.regime === "simples_nacional";
+    const aliquotaServico = Number(empresa.aliquota_iss) || 0;
+
+    return {
+        data_emissao: agoraBrtIso(),
+        natureza_operacao: 1,
+        optante_simples_nacional: optanteSimples,
+        incentivador_cultural: false,
+        regime_especial_tributacao: optanteSimples ? 6 : undefined,
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -95,54 +104,122 @@ export async function emitirNFSe({
             razao_social: tomador.razao_social,
         },
         servico: {
-            aliquota: empresa.aliquota_iss,
+            aliquota: aliquotaServico,
             discriminacao: servico.descricao,
             iss_retido: false,
-            item_lista_servico: servico.codigo_lc116,
+            item_lista_servico: codigoServico6Digitos(servico.codigo_lc116),
             codigo_tributario_municipio:
                 servico.codigo_tributario_municipio || undefined,
             valor_servicos: servico.valor_total,
         },
     };
+}
+
+function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
+    const optanteSimples = empresa.regime === "simples_nacional";
+
+    // codigo_tributacao_nacional_iss: 6 dígitos da Tabela CGSN (NFS-e Nacional).
+    // Para LC 14.01 (manutenção/reparação de veículos) → 140100.
+    const codTribNacional = Number(
+        codigoServico6Digitos(
+            servico.codigo_tributacao_nacional ||
+                empresa.codigo_tributacao_nacional ||
+                servico.codigo_lc116
+        )
+    );
+
+    // Numero DPS único na faixa 1..999999999999999 (15 dígitos). Usamos timestamp em segundos.
+    const numeroDps = Math.floor(Date.now() / 1000);
+
+    const dataEmissao = agoraBrtIso();
+
+    const payload = {
+        data_emissao: dataEmissao,
+        serie_dps: 1,
+        numero_dps: numeroDps,
+        data_competencia: competencia,
+        emitente_dps: "1", // Prestador
+        codigo_municipio_emissora: Number(empresa.municipio_codigo),
+        cnpj_prestador: empresa.cnpj,
+        inscricao_municipal_prestador: empresa.inscricao_municipal || undefined,
+        razao_social_prestador: empresa.razao_social || undefined,
+        codigo_opcao_simples_nacional: optanteSimples ? "3" : "1", // 3=ME/EPP, 1=Não optante
+        regime_especial_tributacao: "0", // Nenhum
+        codigo_municipio_prestacao: Number(empresa.municipio_codigo),
+        codigo_tributacao_nacional_iss: Number(codTribNacional),
+        descricao_servico: servico.descricao,
+        valor_servico: Number(servico.valor_total),
+        tributacao_iss: "1", // Operação tributável
+        tipo_retencao_iss: "1", // Não Retido
+        indicador_total_tributacao: "0",
+        // Reforma Tributária (LC 214/2025)
+        finalidade_emissao: "0", // NFS-e regular
+        consumidor_final: tomador.tipo === "PF" ? "1" : "0",
+        indicador_destinatario: "0", // tomador = destinatário
+    };
+
+    if (tomador.tipo === "PJ") {
+        payload.cnpj_tomador = tomador.documento;
+    } else {
+        payload.cpf_tomador = tomador.documento;
+    }
+    payload.razao_social_tomador = tomador.razao_social;
+
+    return payload;
+}
+
+/**
+ * Emite NFS-e na Focus NFe (escolhe padrão automaticamente).
+ *
+ * @param {Object} params
+ * @param {string} params.referencia
+ * @param {Object} params.empresa
+ * @param {Object} params.tomador {tipo, documento, razao_social}
+ * @param {Object} params.servico {descricao, codigo_lc116, valor_total, codigo_tributacao_nacional?}
+ * @param {string} params.competencia AAAA-MM-DD
+ */
+export async function emitirNFSe(params) {
+    const { referencia, empresa } = params;
+    const padrao = resolverPadrao(empresa);
+    const basePath = basePathPara(padrao);
+
+    const payload =
+        padrao === "nacional"
+            ? montarPayloadNacional(params)
+            : montarPayloadMunicipal(params);
 
     logger.info(
-        { referencia, valor: servico.valor_total, env: ENV },
+        { referencia, valor: params.servico.valor_total, env: ENV, padrao },
         "emitindo NFS-e na Focus"
     );
 
     const t0 = Date.now();
     const result = await focusFetch(
         "POST",
-        `/v2/nfse?ref=${encodeURIComponent(referencia)}`,
+        `${basePath}?ref=${encodeURIComponent(referencia)}`,
         empresa.focus_token,
         payload
     );
     logger.info(
-        { referencia, duration_ms: Date.now() - t0, status: result.status },
+        { referencia, duration_ms: Date.now() - t0, status: result.status, padrao },
         "Focus respondeu"
     );
 
-    return { payload, result };
+    return { payload, result, padrao };
 }
 
-/**
- * Consulta status de NFS-e emitida.
- * Necessário porque a emissão é assíncrona — você emite e depois consulta.
- */
-export async function consultarNFSe(referencia, focusToken) {
+export async function consultarNFSe(referencia, focusToken, empresa) {
+    const basePath = basePathPara(resolverPadrao(empresa));
     return focusFetch(
         "GET",
-        `/v2/nfse/${encodeURIComponent(referencia)}`,
+        `${basePath}/${encodeURIComponent(referencia)}`,
         focusToken
     );
 }
 
-/**
- * Baixa PDF (DANFSE) da nota emitida.
- * Retorna Buffer com o conteúdo binário.
- */
-export async function baixarPdf(referencia, focusToken) {
-    const url = `${BASE_URL}/v2/nfse/${encodeURIComponent(referencia)}.pdf`;
+export async function baixarPdf(referencia, focusToken, empresa) {
+    const basePath = basePathPara(resolverPadrao(empresa));
+    const url = `${BASE_URL}${basePath}/${encodeURIComponent(referencia)}.pdf`;
     const auth = Buffer.from(`${focusToken}:`).toString("base64");
     const response = await fetch(url, {
         headers: { Authorization: `Basic ${auth}` },

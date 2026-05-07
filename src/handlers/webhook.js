@@ -10,7 +10,8 @@
  *  4. Se cliente confirma: emite (com ou sem aprovação admin)
  *  5. Devolve PDF
  */
-import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import {
     findEmpresaByWhatsapp,
     findEmpresaById,
@@ -19,19 +20,12 @@ import {
     insertConversa,
     updateConversa,
     finalizarConversa,
-    insertNota,
-    updateNotaStatus,
     registrarMensagemProcessada,
     logEvento,
 } from "../db/index.js";
-import fs from "node:fs/promises";
 import { transcrever } from "../services/whisper.js";
 import { extrairCampos } from "../services/extractor.js";
-import {
-    emitirNFSe,
-    consultarNFSe,
-    baixarPdf,
-} from "../services/focusnfe.js";
+import { emitirNFSe } from "../services/emissor.js";
 import {
     enviarTexto,
     enviarPdf,
@@ -311,90 +305,50 @@ async function tratarRespostaAdmin(texto) {
 }
 
 /**
- * Emite a NFS-e na Focus e devolve o PDF pelo WhatsApp.
+ * Emite a NFS-e via roteador (Focus ou EPN) e devolve o PDF pelo WhatsApp.
+ * Toda a persistência (notas_emitidas) e geração de DANF-Se ficam dentro
+ * do emissor.js — aqui só interpretamos o resultado e respondemos.
  */
 async function emitirEEnviarPdf(conversa, empresa, numero) {
     const payload = JSON.parse(conversa.payload_json);
-    const referencia = `pac-${empresa.id}-${randomUUID().slice(0, 8)}`;
-
-    // 1. Salva nota como pendente (idempotência)
-    const notaResult = insertNota.run(
-        empresa.id,
-        conversa.id,
-        referencia,
-        "pendente",
-        payload.tomador.documento,
-        payload.tomador.razao_social,
-        payload.servico.descricao,
-        payload.servico.valor_total,
-        payload.servico.codigo_lc116,
-        null, // audio_msg_id
-        null, // transcricao
-        null  // payload_enviado preenchemos depois
-    );
-    const notaId = notaResult.lastInsertRowid;
 
     try {
-        // 2. Emite na Focus
-        const { payload: payloadFocus, result } = await emitirNFSe({
-            referencia,
+        const result = await emitirNFSe({
             empresa,
             tomador: payload.tomador,
             servico: payload.servico,
             competencia: payload.competencia,
+            conversaId: conversa.id,
         });
 
-        logEvento("emissao", empresa.id, conversa.id, { referencia, result });
+        logEvento("emissao", empresa.id, conversa.id, {
+            referencia: result.referencia,
+            status: result.status,
+            chaveAcesso: result.chaveAcesso,
+        });
 
-        // 3. Status na Focus pode ser autorizada na hora ou processando
-        let status = result.status;
-        let consulta = result;
+        if (result.status === "autorizada") {
+            const numero_nfse = result.numero || result.chaveAcesso?.slice(-8) || "—";
+            const valorFmt = Number(payload.servico.valor_total).toFixed(2);
 
-        if (status === "processando_autorizacao") {
-            // pequeno polling — Focus geralmente autoriza em 5-30s
-            for (let i = 0; i < 6; i++) {
-                await new Promise((r) => setTimeout(r, 5000));
-                consulta = await consultarNFSe(referencia, empresa.focus_token);
-                status = consulta.status;
-                if (status !== "processando_autorizacao") break;
+            // Tenta mandar PDF; se não tiver, manda só o texto com a chave.
+            const pdfPath = result.pdfPath;
+            if (pdfPath && fsSync.existsSync(pdfPath)) {
+                const pdfBuffer = fsSync.readFileSync(pdfPath);
+                await enviarPdf(
+                    numero,
+                    pdfBuffer,
+                    `NFS-e-${numero_nfse}.pdf`,
+                    `✅ Nota emitida! Número: ${numero_nfse}\nValor: R$ ${valorFmt}`
+                );
+            } else {
+                await enviarTexto(
+                    numero,
+                    `✅ Nota emitida!\nNúmero: ${numero_nfse}\nValor: R$ ${valorFmt}\nChave: ${result.chaveAcesso || "—"}`
+                );
             }
-        }
-
-        if (status === "autorizado") {
-            const pdfBuffer = await baixarPdf(referencia, empresa.focus_token);
-            updateNotaStatus.run(
-                "autorizada",
-                consulta.numero || null,
-                consulta.codigo_verificacao || null,
-                consulta.url || null,
-                consulta.url_xml || null,
-                null,
-                JSON.stringify(consulta),
-                "autorizada",
-                notaId
-            );
-
-            await enviarPdf(
-                numero,
-                pdfBuffer,
-                `NFS-e-${consulta.numero || referencia}.pdf`,
-                `✅ Nota emitida! Número: ${consulta.numero || "—"}\nValor: R$ ${payload.servico.valor_total.toFixed(2)}`
-            );
-            finalizarConversa.run("finalizada", conversa.id);
         } else {
-            // erro / rejeitada
-            const erroMsg = consulta.mensagem_sefaz || consulta.erros?.join("; ") || "Status: " + status;
-            updateNotaStatus.run(
-                "rejeitada",
-                null,
-                null,
-                null,
-                null,
-                erroMsg,
-                JSON.stringify(consulta),
-                "rejeitada",
-                notaId
-            );
+            const erroMsg = result.erro || `Status: ${result.status}`;
             await enviarTexto(
                 numero,
                 `❌ A SEFAZ rejeitou a emissão: ${erroMsg}\n\nVou avisar a equipe pra investigar.`
@@ -402,24 +356,13 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
             if (ADMIN_WHATSAPP) {
                 await enviarTexto(
                     ADMIN_WHATSAPP,
-                    `Nota ${referencia} rejeitada: ${erroMsg}`
+                    `Nota ${result.referencia} rejeitada (${empresa.razao_social}): ${erroMsg}`
                 );
             }
-            finalizarConversa.run("finalizada", conversa.id);
         }
+        finalizarConversa.run("finalizada", conversa.id);
     } catch (err) {
-        logger.error({ err: err.message, referencia }, "erro na emissão");
-        updateNotaStatus.run(
-            "rejeitada",
-            null,
-            null,
-            null,
-            null,
-            err.message,
-            null,
-            "rejeitada",
-            notaId
-        );
+        logger.error({ err: err.message }, "erro na emissão (roteador)");
         await enviarTexto(
             numero,
             `❌ Tive um erro técnico ao emitir. A equipe foi notificada.`
@@ -427,7 +370,7 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
         if (ADMIN_WHATSAPP) {
             await enviarTexto(
                 ADMIN_WHATSAPP,
-                `Erro técnico ref ${referencia}: ${err.message}`
+                `Erro técnico (${empresa.razao_social}): ${err.message}`
             );
         }
         finalizarConversa.run("finalizada", conversa.id);

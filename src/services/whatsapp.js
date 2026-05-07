@@ -12,6 +12,9 @@ import { logger } from "../utils/logger.js";
 const BASE_URL = process.env.EVOLUTION_API_URL || "http://localhost:8080";
 const API_KEY = process.env.EVOLUTION_API_KEY;
 const INSTANCE = process.env.EVOLUTION_INSTANCE_NAME || "pac-bot";
+// Modo dry-run: NÃO chama Evolution real, apenas loga as ações.
+// Útil pra testar fluxo do bot sem ter Evolution rodando.
+const DRY_RUN = process.env.WHATSAPP_DRY_RUN === "1";
 
 async function evoFetch(method, path, body) {
     const response = await fetch(`${BASE_URL}${path}`, {
@@ -46,6 +49,10 @@ async function evoFetch(method, path, body) {
  * @param {string} texto
  */
 export async function enviarTexto(numero, texto) {
+    if (DRY_RUN) {
+        logger.info({ to: numero, texto }, "[DRY_RUN] enviarTexto");
+        return { dry_run: true, to: numero, text: texto };
+    }
     return evoFetch("POST", `/message/sendText/${INSTANCE}`, {
         number: numero,
         text: texto,
@@ -60,6 +67,13 @@ export async function enviarTexto(numero, texto) {
  * @param {string} caption
  */
 export async function enviarPdf(numero, pdfBuffer, fileName, caption = "") {
+    if (DRY_RUN) {
+        logger.info(
+            { to: numero, fileName, caption, sizeBytes: pdfBuffer.length },
+            "[DRY_RUN] enviarPdf"
+        );
+        return { dry_run: true, to: numero, fileName, sizeBytes: pdfBuffer.length };
+    }
     const base64 = pdfBuffer.toString("base64");
     return evoFetch("POST", `/message/sendMedia/${INSTANCE}`, {
         number: numero,
