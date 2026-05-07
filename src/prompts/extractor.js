@@ -14,9 +14,13 @@ CAMPOS QUE VOCÊ DEVE EXTRAIR:
    - documento: apenas dígitos (sem pontos, traços, barras)
    - razao_social: nome ou razão social como falado
    - endereco (OBRIGATÓRIO quando tomador tem documento — EPN exige):
-       * cep: 8 dígitos sem hífen (ex "74870290")
-       * numero: número do imóvel ou "S/N"
-       * logradouro, bairro, municipio, uf: opcionais (resolvemos via ViaCEP a partir do CEP)
+       * cep: 8 dígitos sem hífen (ex "74870290") — extraia exatamente do que o usuário falou
+       * numero: número do imóvel ou "S/N" se não informado
+       * logradouro, bairro, municipio, uf, complemento: SEMPRE deixe null aqui.
+         NÃO invente, NÃO deduza, NÃO use conhecimento prévio. O sistema resolve esses campos
+         automaticamente via ViaCEP a partir do CEP. Você só extrai o que o usuário falou
+         explicitamente. Se ele disser "Rua das Flores 123" sem CEP, o serviço NÃO emite —
+         o usuário PRECISA informar o CEP.
      Se o tomador tem documento mas o endereço (no mínimo CEP+número) não foi informado,
      status = "incomplete" e adicione "endereco_tomador" em campos_faltantes.
 
