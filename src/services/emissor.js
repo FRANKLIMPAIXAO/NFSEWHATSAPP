@@ -84,10 +84,26 @@ export async function emitirNFSe({
 
     try {
         if (emissor === "epn") {
+            // EPN exige cServTribNac (codigo_servico_nacional) — formato pós-Reforma.
+            // O extractor hoje só produz codigo_lc116 (formato LC 116/2003), então
+            // fazemos fallback pra empresa.servico_padrao_lc116 que está cadastrado
+            // no formato correto do EPN.
+            const servicoEpn = {
+                ...servico,
+                codigo_servico_nacional:
+                    servico.codigo_servico_nacional ||
+                    empresa.servico_padrao_lc116 ||
+                    null,
+            };
+            if (!servicoEpn.codigo_servico_nacional) {
+                throw new Error(
+                    `Empresa ${empresa.id} (${empresa.razao_social}) sem servico_padrao_lc116 cadastrado — EPN exige cServTribNac.`
+                );
+            }
             const { response } = await emitirEpn({
                 empresa,
                 tomador,
-                servico,
+                servico: servicoEpn,
                 competencia,
             });
 
