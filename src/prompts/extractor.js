@@ -13,6 +13,12 @@ CAMPOS QUE VOCÊ DEVE EXTRAIR:
    - tipo: "PJ" se tiver CNPJ ou nome de empresa, "PF" se tiver CPF ou nome pessoal
    - documento: apenas dígitos (sem pontos, traços, barras)
    - razao_social: nome ou razão social como falado
+   - endereco (OBRIGATÓRIO quando tomador tem documento — EPN exige):
+       * cep: 8 dígitos sem hífen (ex "74870290")
+       * numero: número do imóvel ou "S/N"
+       * logradouro, bairro, municipio, uf: opcionais (resolvemos via ViaCEP a partir do CEP)
+     Se o tomador tem documento mas o endereço (no mínimo CEP+número) não foi informado,
+     status = "incomplete" e adicione "endereco_tomador" em campos_faltantes.
 
 2. SERVIÇO:
    - descricao: o que foi prestado, em português claro
@@ -51,7 +57,16 @@ FORMATO DA RESPOSTA: APENAS JSON válido, sem markdown, sem explicação. Estrut
   "tomador": {
     "tipo": "PJ" | "PF",
     "documento": "string apenas dígitos",
-    "razao_social": "string"
+    "razao_social": "string",
+    "endereco": {
+      "cep": "8 dígitos sem hífen",
+      "numero": "string",
+      "logradouro": "string opcional",
+      "bairro": "string opcional",
+      "municipio": "string opcional",
+      "uf": "string 2 letras opcional",
+      "complemento": "string opcional"
+    } | null
   } | null,
   "servico": {
     "descricao": "string",

@@ -12,7 +12,34 @@ import { db, insertNota, updateNotaStatus, logEvento } from "../db/index.js";
 import { emitirNFSe as emitirFocus } from "./focusnfe.js";
 import { emitirEpn, consultarEpn, cancelarEpn } from "./epn.js";
 import { gerarDanfse } from "./danfe.js";
+import { resolverCep } from "./viacep.js";
 import { logger } from "../utils/logger.js";
+
+/**
+ * Se o tomador tem CEP mas faltam logradouro/bairro/IBGE/UF, consulta ViaCEP
+ * e completa. Devolve um novo objeto tomador (não muta o original).
+ */
+async function completarEnderecoTomador(tomador) {
+    const e = tomador?.endereco;
+    if (!e?.cep) return tomador;
+    const jaCompleto = e.logradouro && e.bairro && (e.ibge || e.cMun) && e.uf;
+    if (jaCompleto) return tomador;
+
+    const dados = await resolverCep(e.cep);
+    if (!dados) return tomador; // ViaCEP falhou — deixa como está e EPN reclama com mensagem clara
+
+    return {
+        ...tomador,
+        endereco: {
+            ...e,
+            logradouro: e.logradouro || dados.logradouro,
+            bairro: e.bairro || dados.bairro,
+            municipio: e.municipio || dados.municipio,
+            uf: e.uf || dados.uf,
+            ibge: e.ibge || dados.ibge,
+        },
+    };
+}
 
 function novaReferencia(empresa) {
     return `${empresa.id}-${Date.now()}-${randomUUID().slice(0, 8)}`;
@@ -100,9 +127,19 @@ export async function emitirNFSe({
                     `Empresa ${empresa.id} (${empresa.razao_social}) sem servico_padrao_lc116 cadastrado — EPN exige cServTribNac.`
                 );
             }
+
+            // EPN exige endereço completo do tomador quando ele é identificado.
+            // O extractor pede CEP+número do usuário; aqui completamos via ViaCEP.
+            const tomadorCompleto = await completarEnderecoTomador(tomador);
+            if (tomadorCompleto.documento && !tomadorCompleto.endereco?.cep) {
+                throw new Error(
+                    `Tomador identificado (${tomadorCompleto.documento}) sem endereço — EPN exige CEP do tomador.`
+                );
+            }
+
             const { response } = await emitirEpn({
                 empresa,
-                tomador,
+                tomador: tomadorCompleto,
                 servico: servicoEpn,
                 competencia,
             });

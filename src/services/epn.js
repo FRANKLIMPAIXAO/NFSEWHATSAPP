@@ -85,7 +85,19 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
             tomador: {
                 [tomador.tipo === "PJ" ? "cnpj" : "cpf"]: tomador.documento,
                 nome: tomador.razao_social,
-                endereco: tomador.endereco,
+                endereco: tomador.endereco
+                    ? {
+                          xLgr: tomador.endereco.logradouro,
+                          nro: tomador.endereco.numero || "S/N",
+                          ...(tomador.endereco.complemento && {
+                              xCpl: tomador.endereco.complemento,
+                          }),
+                          xBairro: tomador.endereco.bairro,
+                          cMun: tomador.endereco.ibge || tomador.endereco.cMun,
+                          uf: tomador.endereco.uf,
+                          cep: tomador.endereco.cep,
+                      }
+                    : undefined,
             },
 
             servico: {
