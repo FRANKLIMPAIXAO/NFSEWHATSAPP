@@ -49,7 +49,15 @@ export async function handleWebhook(evt) {
     const msg = evt.data;
     if (!msg || msg.key?.fromMe) return; // ignora mensagens enviadas pelo bot
 
-    const numero = msg.key.remoteJid?.replace(/@.*$/, ""); // 5511999...@s.whatsapp.net
+    // Ignora mensagens de grupo: remoteJid de grupo termina em @g.us (e o número
+    // tem 18 dígitos no formato do WhatsApp). Bot é 1:1 com o dono cadastrado.
+    const remoteJid = msg.key.remoteJid || "";
+    if (remoteJid.endsWith("@g.us")) {
+        logger.info({ remoteJid }, "msg de grupo ignorada");
+        return;
+    }
+
+    const numero = remoteJid.replace(/@.*$/, "");
     const messageId = msg.key.id;
     const tipo = msg.messageType; // audioMessage | conversation | extendedTextMessage
     const texto =
@@ -107,19 +115,30 @@ export async function handleWebhook(evt) {
 
     if (tipo === "audioMessage") {
         let audioPath = null;
+        let etapa = "inicio";
         try {
             await enviarTexto(numero, "🎙️ Recebi seu áudio. Transcrevendo...");
+            etapa = "baixar";
             const audioResult = await baixarAudio(messageId);
             audioPath = audioResult.path;
+            etapa = "transcrever";
             textoExtracao = await transcrever(audioPath);
             logEvento("audio_transcrito", empresa.id, conversaAtiva?.id, {
                 texto: textoExtracao,
+                chars: textoExtracao?.length || 0,
             });
         } catch (err) {
-            logger.error({ err: err.message }, "falha no áudio");
+            logger.error({ err: err.message, etapa }, "falha no áudio");
+            // Persiste no DB também (logger só vai pro stdout)
+            logEvento("audio_erro", empresa.id, conversaAtiva?.id, {
+                etapa,
+                error: err.message,
+                stack: err.stack?.slice(0, 500),
+                messageId,
+            });
             await enviarTexto(
                 numero,
-                "Ops, não consegui processar o áudio. Pode mandar de novo ou descrever por texto?"
+                `Ops, não consegui processar o áudio (etapa: ${etapa}). Pode mandar de novo ou descrever por texto?`
             );
             return;
         } finally {
