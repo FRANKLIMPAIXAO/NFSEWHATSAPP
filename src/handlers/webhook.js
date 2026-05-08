@@ -33,6 +33,7 @@ import {
     baixarAudio,
     baixarMidia,
 } from "../services/whatsapp.js";
+import { formatarResumoCliente } from "../utils/resumo.js";
 import { logger } from "../utils/logger.js";
 
 const APPROVAL_MODE = process.env.APPROVAL_MODE || "manual_approval";
@@ -287,10 +288,7 @@ export async function handleWebhook(evt) {
             conversaId = result.lastInsertRowid;
         }
 
-        await enviarTexto(
-            numero,
-            `${extracao.resumo_confirmacao}\n\nResponda *SIM* pra emitir ou *CANCELA* pra desistir.`
-        );
+        await enviarTexto(numero, formatarResumoCliente(extracao, empresa));
     } else if (extracao.status === "incomplete" || extracao.status === "ambiguous") {
         // Salva conversa parcial e pergunta o que falta
         if (conversaAtiva) {
