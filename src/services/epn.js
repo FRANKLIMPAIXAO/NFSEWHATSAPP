@@ -184,14 +184,17 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
 
             // Bloco ibsCbs no nível do infDps — campos da Reforma Tributária (LC 214/2025).
             // finNFSe = "0" (NFS-e regular), indDest = "0" (destinatário = tomador),
-            // indFinal = "0" (não é consumo pessoal). cIndOp deve sair do Anexo VII.
+            // indFinal = "0" (não é consumo pessoal). cIndOp sai do Anexo VII por
+            // empresa (depende do tipo de serviço). Default 030101 (Inc. III,
+            // demais serviços, estabelecimento do fornecedor) — funciona pra
+            // serviços comuns como consultoria, mas manutenção exige 050101.
             // CST 000 = Tributação Integral pelo IBS e CBS.
             // cClassTrib 000001 = "Situações tributadas integralmente pelo IBS e CBS" — único
             // código válido pra CST 000 em serviço comum (Informe Técnico RT 2025.002).
             // SEFAZ valida o par (CST, cClassTrib) e retorna E0959 se incompatível.
             ibsCbs: {
                 finNFSe: "0",
-                cIndOp: "100000", // operação interna padrão; consultar Anexo VII pra casos especiais
+                cIndOp: empresa.cind_op_padrao || "030101",
                 indDest: "0",
                 indFinal: "0",
                 valores: {

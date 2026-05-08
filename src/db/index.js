@@ -47,6 +47,12 @@ ensureColumn("empresas", "codigo_nbs_padrao", "TEXT");
 //   0 = não (default seguro) — omite IM do prestador no DPS pra evitar E0120
 //   1 = sim — envia IM normalmente. Setar quando município migrar pro CNC ou em produção.
 ensureColumn("empresas", "municipio_no_cnc", "INTEGER NOT NULL DEFAULT 0");
+// cIndOp padrão (Anexo VII NFS-e Nacional). 6 dígitos. Depende do tipo de
+// serviço da empresa. Exemplos:
+//   050101 = Inc. V, serviço sobre bem móvel material, estab. fornecedor (manutenção)
+//   030101 = Inc. III, demais serviços, estab. fornecedor (consultoria comum)
+//   100301 = Inc. X, serviços à distância, domicílio do adquirente
+ensureColumn("empresas", "cind_op_padrao", "TEXT");
 
 // =============================================================
 // EMPRESAS
