@@ -246,14 +246,34 @@ export async function emitirNFSe({
             response: result,
         };
     } catch (err) {
+        // NfseApiError (lib nfse-nacional) traz o body cru da resposta SEFAZ
+        // em err.body — é onde mora o motivo real do 400/422. Capturar pra DB
+        // pra não voar cego. Se for erro de rede / outro tipo, body é undefined.
+        // err.dpsPayload é anexado em epn.js pro caso de queremos cruzar payload
+        // enviado x resposta da SEFAZ pra diagnosticar.
+        const sefazBody = err.body || null;
+        const dpsPayload = err.dpsPayload || null;
+        // Persiste payload enviado em coluna dedicada
+        if (dpsPayload) {
+            db.prepare(
+                "UPDATE notas_emitidas SET payload_enviado = ? WHERE id = ?"
+            ).run(JSON.stringify(dpsPayload).slice(0, 50_000), notaId);
+        }
         persistirResultado({
             notaId,
             status: "rejeitada",
             erro: err.message,
-            response: { error: err.message, stack: err.stack?.slice(0, 1000) },
+            response: {
+                error: err.message,
+                statusCode: err.statusCode,
+                sefazBody,
+                stack: err.stack?.slice(0, 1000),
+            },
         });
         logEvento("emissao_erro", empresa.id, conversaId, {
             error: err.message,
+            statusCode: err.statusCode,
+            sefazBody: sefazBody?.slice(0, 2000),
         });
         throw err;
     }

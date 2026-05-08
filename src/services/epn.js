@@ -188,7 +188,16 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
 
     const service = new ContribuinteService(ctx);
     const t0 = Date.now();
-    const response = await service.emitir(dps);
+    let response;
+    try {
+        response = await service.emitir(dps);
+    } catch (err) {
+        // Anexa o payload no erro pra que emissor.js consiga persistir
+        // em notas_emitidas.payload_enviado e a gente possa cruzar payload x
+        // resposta SEFAZ pra debug. Sem isso voamos cego em 400 Bad Request.
+        err.dpsPayload = dps;
+        throw err;
+    }
     logger.info(
         {
             duration_ms: Date.now() - t0,
