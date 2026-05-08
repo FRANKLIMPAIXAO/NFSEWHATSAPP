@@ -31,7 +31,23 @@ CAMPOS QUE VOCÊ DEVE EXTRAIR:
        Deixe endereco = null. Status = "ok" só com CNPJ + valor + descrição.
      * Se tomador é PF (CPF): endereço é OBRIGATÓRIO (EPN exige).
          - cep: 8 dígitos sem hífen (ex "74870290") — extraia exatamente do que o usuário falou
-         - numero: número do imóvel ou "S/N" se não informado
+         - numero: número do imóvel. Regras estritas:
+             > APENAS extraia se aparecer em CONTEXTO EXPLÍCITO de endereço:
+               junto do CEP, do logradouro, ou precedido por "nº/n°/numero/casa/
+               lote/quadra/apto/apartamento". Tipicamente são 1-5 dígitos puros
+               (ex 12, 123, 1500), podendo ter sufixo simples (ex "42-A", "10B").
+             > NÃO use tokens que aparecem na DESCRIÇÃO DO SERVIÇO, nome de
+               produto, modelo de aparelho, código de OS, ou em qualquer ponto
+               sem âncora de endereço.
+             > Exemplos:
+                 ✓ "Rua das Flores 123" → numero "123"
+                 ✓ "CEP 74948230, nº 42, apto 301" → numero "42", complemento "Apto 301"
+                 ✗ "manutenção de celular A07" → "A07" é MODELO do aparelho,
+                   NÃO é número da casa. Se não houver número claro de imóvel,
+                   numero = "S/N".
+                 ✗ "instalação do produto M14 na rua tal" → "M14" é código de
+                   produto, NÃO use como numero.
+             > Em qualquer dúvida, prefira "S/N" — é seguro e o sistema aceita.
          - logradouro, bairro, municipio, uf, complemento: SEMPRE deixe null aqui.
            NÃO invente, NÃO deduza, NÃO use conhecimento prévio. O sistema resolve esses campos
            automaticamente via ViaCEP a partir do CEP. Você só extrai o que o usuário falou
