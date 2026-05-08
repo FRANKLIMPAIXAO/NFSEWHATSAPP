@@ -86,14 +86,32 @@ export async function enviarPdf(numero, pdfBuffer, fileName, caption = "") {
 }
 
 /**
- * Baixa o áudio que o usuário mandou.
- * Evolution disponibiliza o conteúdo via base64 no payload do webhook OU
- * via endpoint /chat/getBase64FromMediaMessage. Aqui usamos o endpoint.
+ * Mapa de mimetype → extensão de arquivo. Usado pra salvar o arquivo
+ * baixado com a extensão correta (Whisper exige .ogg/.mp3/.wav, Claude
+ * Vision aceita jpg/png/gif/webp, Claude Documents aceita .pdf).
+ */
+const MIME_TO_EXT = {
+    "audio/ogg": "ogg",
+    "audio/ogg; codecs=opus": "ogg",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/webm": "webm",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "application/pdf": "pdf",
+};
+
+/**
+ * Baixa qualquer mídia (áudio, imagem, documento) que o usuário mandou.
+ * Evolution disponibiliza via /chat/getBase64FromMediaMessage.
  *
  * @param {string} messageId - id da mensagem
- * @returns {Promise<{path: string, mimetype: string}>} caminho local do arquivo salvo
+ * @returns {Promise<{path: string, base64: string, mimetype: string, ext: string, size: number}>}
  */
-export async function baixarAudio(messageId) {
+export async function baixarMidia(messageId) {
     const result = await evoFetch(
         "POST",
         `/chat/getBase64FromMediaMessage/${INSTANCE}`,
@@ -101,14 +119,37 @@ export async function baixarAudio(messageId) {
     );
 
     if (!result.base64) {
-        throw new Error("Áudio não retornou base64");
+        throw new Error("Mídia não retornou base64");
     }
+
+    const mimetype = result.mimetype || "application/octet-stream";
+    // Normaliza mimetype (Evolution às vezes manda com codec após ;)
+    const mimeBase = mimetype.split(";")[0].trim();
+    const ext = MIME_TO_EXT[mimeBase] || MIME_TO_EXT[mimetype] || "bin";
 
     const tmpDir = "/tmp/agent-nfse-audio";
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    const filePath = path.join(tmpDir, `${messageId}.ogg`);
-    fs.writeFileSync(filePath, Buffer.from(result.base64, "base64"));
+    const filePath = path.join(tmpDir, `${messageId}.${ext}`);
+    const buf = Buffer.from(result.base64, "base64");
+    fs.writeFileSync(filePath, buf);
 
-    logger.info({ filePath, size: result.base64.length }, "audio baixado");
-    return { path: filePath, mimetype: result.mimetype || "audio/ogg" };
+    logger.info(
+        { filePath, mimetype, ext, size: buf.length },
+        "mídia baixada"
+    );
+    return {
+        path: filePath,
+        base64: result.base64,
+        mimetype: mimeBase,
+        ext,
+        size: buf.length,
+    };
+}
+
+/**
+ * Wrapper de retrocompatibilidade — a maioria do código chama baixarAudio.
+ * @deprecated use baixarMidia direto.
+ */
+export async function baixarAudio(messageId) {
+    return baixarMidia(messageId);
 }

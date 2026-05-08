@@ -24,31 +24,74 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
  */
 
 /**
- * Extrai campos de NFS-e do texto.
- * @param {string} texto - texto livre (transcrição do áudio)
- * @param {Object|null} payloadAnterior - extração parcial de conversa anterior (pra retomada)
+ * Extrai campos de NFS-e a partir de texto, imagem(s) e/ou PDF.
+ *
+ * @param {string|Object} input — pode ser:
+ *   - string (compatibilidade): tratado como texto livre
+ *   - {texto?: string, imagens?: Array<{base64, mimetype}>, pdf?: {base64}}
+ * @param {Object|null} payloadAnterior - extração parcial de conversa anterior
  * @returns {Promise<ExtractionResult>}
  */
-export async function extrairCampos(texto, payloadAnterior = null) {
+export async function extrairCampos(input, payloadAnterior = null) {
     const t0 = Date.now();
     const today = new Date().toISOString().slice(0, 10);
 
-    let userContent = `DATA DE HOJE: ${today}\n\nTEXTO DO ÁUDIO:\n${texto}`;
+    // Normaliza input: string vira {texto}
+    const { texto, imagens, pdf } =
+        typeof input === "string" ? { texto: input } : input || {};
+
+    const temMidia = (imagens && imagens.length) || pdf;
+    const cabecalho = `DATA DE HOJE: ${today}`;
+    const introTexto = temMidia
+        ? "TEXTO/LEGENDA DO USUÁRIO (pode estar vazio se só mandou mídia):"
+        : "TEXTO DO USUÁRIO:";
+
+    let userText = `${cabecalho}\n\n${introTexto}\n${texto || "(vazio)"}`;
     if (payloadAnterior) {
-        userContent =
+        userText =
             `[CONTINUAÇÃO]\n` +
-            `DATA DE HOJE: ${today}\n\n` +
+            `${cabecalho}\n\n` +
             `PAYLOAD ANTERIOR (extração parcial):\n` +
             `${JSON.stringify(payloadAnterior, null, 2)}\n\n` +
-            `NOVO TEXTO DO USUÁRIO (completando o anterior):\n${texto}`;
+            `NOVA MENSAGEM DO USUÁRIO (completando o anterior):\n${texto || "(sem texto, ver mídia anexa)"}`;
     }
+    if (temMidia) {
+        userText +=
+            "\n\nO USUÁRIO ANEXOU MÍDIA (imagem(ns) ou PDF). Extraia os dados visíveis " +
+            "(orçamento, cartão de visita, proposta, etc.) e combine com o texto se houver.";
+    }
+
+    // Monta content blocks pro Anthropic SDK (texto + imagens + pdf)
+    const contentBlocks = [];
+    if (pdf?.base64) {
+        contentBlocks.push({
+            type: "document",
+            source: {
+                type: "base64",
+                media_type: "application/pdf",
+                data: pdf.base64,
+            },
+        });
+    }
+    for (const img of imagens || []) {
+        if (!img?.base64) continue;
+        contentBlocks.push({
+            type: "image",
+            source: {
+                type: "base64",
+                media_type: img.mimetype || "image/jpeg",
+                data: img.base64,
+            },
+        });
+    }
+    contentBlocks.push({ type: "text", text: userText });
 
     try {
         const response = await client.messages.create({
             model: MODEL,
             max_tokens: 1024,
             system: EXTRACTOR_SYSTEM_PROMPT,
-            messages: [{ role: "user", content: userContent }],
+            messages: [{ role: "user", content: contentBlocks }],
         });
 
         let raw = response.content[0].text.trim();

@@ -31,6 +31,7 @@ import {
     enviarTexto,
     enviarPdf,
     baixarAudio,
+    baixarMidia,
 } from "../services/whatsapp.js";
 import { logger } from "../utils/logger.js";
 
@@ -59,10 +60,14 @@ export async function handleWebhook(evt) {
 
     const numero = remoteJid.replace(/@.*$/, "");
     const messageId = msg.key.id;
-    const tipo = msg.messageType; // audioMessage | conversation | extendedTextMessage
+    const tipo = msg.messageType; // audioMessage | conversation | extendedTextMessage | imageMessage | documentMessage
     const texto =
         msg.message?.conversation ||
         msg.message?.extendedTextMessage?.text ||
+        // Imagens e documentos podem vir com legenda (caption) — tratar como texto
+        msg.message?.imageMessage?.caption ||
+        msg.message?.documentMessage?.caption ||
+        msg.message?.documentWithCaptionMessage?.message?.documentMessage?.caption ||
         null;
 
     if (!messageId || !numero) {
@@ -112,6 +117,11 @@ export async function handleWebhook(evt) {
 
     // ---------- 4. PROCESSAR MENSAGEM ----------
     let textoExtracao = null;
+    // Mídia visual coletada da mensagem (imagens e/ou PDF) pra extractor multimodal
+    let imagensExtracao = [];
+    let pdfExtracao = null;
+    // Caminhos pra cleanup no final
+    const arquivosTemp = [];
 
     if (tipo === "audioMessage") {
         let audioPath = null;
@@ -145,6 +155,52 @@ export async function handleWebhook(evt) {
             if (audioPath) {
                 await fs.unlink(audioPath).catch(() => {});
             }
+        }
+    } else if (tipo === "imageMessage" || tipo === "documentMessage" || tipo === "documentWithCaptionMessage") {
+        // Mídia visual: imagem ou PDF. Baixa via Evolution e passa pro extractor
+        // multimodal. Caption (legenda) já foi capturada acima como `texto`.
+        let etapa = "inicio";
+        try {
+            const aviso =
+                tipo === "imageMessage"
+                    ? "📷 Recebi a imagem. Analisando..."
+                    : "📄 Recebi o documento. Analisando...";
+            await enviarTexto(numero, aviso);
+            etapa = "baixar";
+            const midia = await baixarMidia(messageId);
+            arquivosTemp.push(midia.path);
+            etapa = "preparar";
+            if (midia.mimetype === "application/pdf") {
+                pdfExtracao = { base64: midia.base64 };
+            } else if (midia.mimetype.startsWith("image/")) {
+                imagensExtracao.push({
+                    base64: midia.base64,
+                    mimetype: midia.mimetype,
+                });
+            } else {
+                throw new Error(`Tipo de mídia não suportado: ${midia.mimetype}`);
+            }
+            textoExtracao = texto || ""; // legenda (pode ser vazia)
+            logEvento("midia_recebida", empresa.id, conversaAtiva?.id, {
+                tipo,
+                mimetype: midia.mimetype,
+                size: midia.size,
+                temLegenda: !!texto,
+            });
+        } catch (err) {
+            logger.error({ err: err.message, etapa, tipo }, "falha na mídia");
+            logEvento("midia_erro", empresa.id, conversaAtiva?.id, {
+                tipo,
+                etapa,
+                error: err.message,
+                stack: err.stack?.slice(0, 500),
+                messageId,
+            });
+            await enviarTexto(
+                numero,
+                `Ops, não consegui processar o arquivo (etapa: ${etapa}). Pode mandar de novo ou descrever por texto?`
+            );
+            return;
         }
     } else if (texto) {
         // Texto pode ser:
@@ -184,14 +240,28 @@ export async function handleWebhook(evt) {
 
     let extracao;
     try {
-        extracao = await extrairCampos(textoExtracao, payloadAnterior);
+        const inputExtracao =
+            imagensExtracao.length || pdfExtracao
+                ? { texto: textoExtracao, imagens: imagensExtracao, pdf: pdfExtracao }
+                : textoExtracao;
+        extracao = await extrairCampos(inputExtracao, payloadAnterior);
         logEvento("extracao", empresa.id, conversaAtiva?.id, extracao);
     } catch (err) {
+        logger.error({ err: err.message }, "erro na extração");
+        logEvento("extracao_erro", empresa.id, conversaAtiva?.id, {
+            error: err.message,
+            stack: err.stack?.slice(0, 500),
+        });
         await enviarTexto(
             numero,
             "Tive um problema interno aqui. Pode tentar de novo?"
         );
         return;
+    } finally {
+        // Cleanup de arquivos temp (áudio já é limpo no try específico dele)
+        for (const p of arquivosTemp) {
+            await fs.unlink(p).catch(() => {});
+        }
     }
 
     // ---------- 6. RESPONDER CONFORME O STATUS ----------
