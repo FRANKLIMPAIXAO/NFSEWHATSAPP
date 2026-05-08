@@ -143,17 +143,6 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
 
             valores: {
                 vServico: Number(servico.valor_total),
-                // Bloco IBS/CBS — Reforma Tributária (LC 214/2025).
-                // Opcional na lib mas a doc oficial NFS-e Nacional marca como obrigatório.
-                // Defaults seguros pra serviço comum tributado:
-                //   CST 000 = tributação plena (não imune/isento/exportação)
-                //   cClassTrib 010100 = serviços em geral, classificação padrão
-                trib: {
-                    gIBSCBS: {
-                        CST: "000",
-                        cClassTrib: "010100",
-                    },
-                },
             },
 
             tributacao: {
@@ -173,11 +162,21 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
             // Bloco ibsCbs no nível do infDps — campos da Reforma Tributária.
             // finNFSe = "0" (NFS-e regular), indDest = "0" (destinatário = tomador),
             // indFinal = "0" (não é consumo pessoal). cIndOp deve sair do Anexo VII.
+            // valores.trib.gIBSCBS exigido pela lib — defaults seguros pra serviço
+            // comum tributado: CST 000 = tributação plena, cClassTrib 010100 = serviços em geral.
             ibsCbs: {
                 finNFSe: "0",
                 cIndOp: "100000", // operação interna padrão; consultar Anexo VII pra casos especiais
                 indDest: "0",
                 indFinal: "0",
+                valores: {
+                    trib: {
+                        gIBSCBS: {
+                            CST: "000",
+                            cClassTrib: "010100",
+                        },
+                    },
+                },
             },
         },
     };
