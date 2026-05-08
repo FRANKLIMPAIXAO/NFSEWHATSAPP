@@ -136,7 +136,12 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                 localPrestacao: { cLocPrestacao: empresa.municipio_codigo },
                 codigoServico: {
                     cServTribNac: servico.codigo_servico_nacional,
-                    ...(servico.codigo_nbs && { cNBSPrinc: servico.codigo_nbs }),
+                    // cNBSPrinc é obrigatório quando há bloco IBS/CBS (E0322).
+                    // Prioridade: extraído pelo LLM > cadastrado na empresa.
+                    ...((servico.codigo_nbs || empresa.codigo_nbs_padrao) && {
+                        cNBSPrinc:
+                            servico.codigo_nbs || empresa.codigo_nbs_padrao,
+                    }),
                 },
                 xDescServ: servico.descricao,
             },

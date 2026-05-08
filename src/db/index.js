@@ -39,6 +39,10 @@ ensureColumn("empresas", "cert_pfx_path", "TEXT");
 ensureColumn("empresas", "cert_pfx_password", "TEXT");
 // Emissor: 'focus' (default, via Focus NFe) ou 'epn' (direto na SEFAZ Nacional)
 ensureColumn("empresas", "emissor", "TEXT NOT NULL DEFAULT 'focus'");
+// Código NBS padrão (Nomenclatura Brasileira de Serviços, 9 dígitos sem pontos).
+// Obrigatório no DPS quando há bloco IBS/CBS — Reforma Tributária. Ex: 120012000
+// = manutenção de computadores; 120015000 = manutenção de máquinas industriais.
+ensureColumn("empresas", "codigo_nbs_padrao", "TEXT");
 
 // =============================================================
 // EMPRESAS

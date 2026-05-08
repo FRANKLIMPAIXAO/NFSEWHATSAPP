@@ -127,6 +127,12 @@ export async function emitirNFSe({
                     `Empresa ${empresa.id} (${empresa.razao_social}) sem servico_padrao_lc116 cadastrado — EPN exige cServTribNac.`
                 );
             }
+            // EPN com bloco IBS/CBS exige cNBS (E0322). Prioridade: extraído > empresa.
+            if (!servicoEpn.codigo_nbs && !empresa.codigo_nbs_padrao) {
+                throw new Error(
+                    `Empresa ${empresa.id} (${empresa.razao_social}) sem codigo_nbs_padrao cadastrado — EPN exige cNBS quando há IBS/CBS.`
+                );
+            }
 
             // EPN exige endereço completo do tomador quando ele é identificado.
             // O extractor pede CEP+número do usuário; aqui completamos via ViaCEP.
