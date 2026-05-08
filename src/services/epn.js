@@ -89,7 +89,11 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
 
             prestador: {
                 cnpj: empresa.cnpj,
-                ...(empresa.inscricao_municipal && {
+                // IM só vai no DPS quando o município está integrado ao CNC NFS-e
+                // Nacional. Caso contrário, SEFAZ retorna E0120: "IM do prestador
+                // não deve ser informado, pois não existem informações complementares
+                // registradas no CNC NFS-e do município emissor informado na DPS".
+                ...(empresa.inscricao_municipal && empresa.municipio_no_cnc && {
                     inscricaoMunicipal: empresa.inscricao_municipal,
                 }),
                 nome: empresa.razao_social,

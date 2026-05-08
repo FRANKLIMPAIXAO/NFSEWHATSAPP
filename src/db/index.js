@@ -43,6 +43,10 @@ ensureColumn("empresas", "emissor", "TEXT NOT NULL DEFAULT 'focus'");
 // Obrigatório no DPS quando há bloco IBS/CBS — Reforma Tributária. Ex: 120012000
 // = manutenção de computadores; 120015000 = manutenção de máquinas industriais.
 ensureColumn("empresas", "codigo_nbs_padrao", "TEXT");
+// Flag: município do prestador tem cadastro complementar no CNC NFS-e Nacional?
+//   0 = não (default seguro) — omite IM do prestador no DPS pra evitar E0120
+//   1 = sim — envia IM normalmente. Setar quando município migrar pro CNC ou em produção.
+ensureColumn("empresas", "municipio_no_cnc", "INTEGER NOT NULL DEFAULT 0");
 
 // =============================================================
 // EMPRESAS
