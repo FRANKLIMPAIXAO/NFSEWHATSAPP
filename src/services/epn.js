@@ -73,6 +73,13 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
     const ctx = buildContext(empresa);
     const numeroDps = generateNumDps();
     const optante = empresa.regime === "simples_nacional";
+    const isMeEpp = optante && empresa.regime !== "mei";
+    // E0625: pra ME/EPP do Simples (opSimpNac=3) com regApurSN=1 (ISS pelo SN)
+    // + tpRetISSQN=1 (não retido) + município ativo no SNNFSe, NÃO se informa
+    // pAliq (a alíquota efetiva vem da faixa do Simples no DAS, não do ISS
+    // municipal). Pra outros regimes (não optante / MEI / retido) a alíquota
+    // continua sendo enviada.
+    const omitirAliquotaIss = isMeEpp; // não retido é fixo no nosso fluxo hoje
 
     const dps = {
         infDps: {
@@ -158,8 +165,14 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                 issqn: {
                     tributacaoIssqn: TributacaoIssqn.TributadaMunicipioPrestador,
                     tipoRetencaoIssqn: TipoRetencaoIssqn.NaoRetido,
-                    // pAliq em decimal (0.05 = 5%); empresa.aliquota_iss é em %
-                    aliquota: (Number(empresa.aliquota_iss) || 0) / 100,
+                    // pAliq em decimal (0.05 = 5%); empresa.aliquota_iss é em %.
+                    // Pra ME/EPP do Simples Nacional sem retenção, OMITE pAliq
+                    // (E0625) — o ISS sai via DAS na faixa do Simples.
+                    ...(omitirAliquotaIss
+                        ? {}
+                        : {
+                              aliquota: (Number(empresa.aliquota_iss) || 0) / 100,
+                          }),
                     exigibilidadeISS: 1, // 1 = ISS exigível (default pra serviço comum)
                 },
                 federal: { cstPisCofins: "00" },
