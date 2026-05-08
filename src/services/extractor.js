@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { EXTRACTOR_SYSTEM_PROMPT } from "../prompts/extractor.js";
 import { resolverCep } from "./viacep.js";
 import { consultarCnpj } from "./cnpj-lookup.js";
+import { validarCpf, formatarCpf } from "../utils/cpf.js";
 import { logger } from "../utils/logger.js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -145,6 +146,25 @@ export async function extrairCampos(input, payloadAnterior = null) {
                     ];
                     data.resumo_confirmacao = `CNPJ ${cnpjLimpo} não encontrado na Receita Federal. Pode confirmar o CNPJ?`;
                 }
+            }
+        }
+
+        // Validação de CPF (DV) — pra PF, antes de qualquer chamada externa.
+        // Receita não tem API pública de CPF, então só validamos dígito verificador.
+        // Pega CPF inventado, digitado errado, ou alucinado pelo LLM ao ler imagem.
+        if (data.tomador?.tipo === "PF" && data.tomador?.documento) {
+            const cpfLimpo = String(data.tomador.documento).replace(/\D/g, "");
+            if (!validarCpf(cpfLimpo)) {
+                data.status = "incomplete";
+                data.campos_faltantes = [
+                    ...(data.campos_faltantes || []),
+                    "cpf_invalido",
+                ];
+                data.resumo_confirmacao =
+                    `CPF ${formatarCpf(cpfLimpo)} não é válido (dígito verificador não bate). ` +
+                    `Pode confirmar o número do CPF?`;
+                logger.warn({ cpf: cpfLimpo }, "cpf_invalido detectado");
+                return data;
             }
         }
 
