@@ -110,8 +110,10 @@ export async function extrairCampos(input, payloadAnterior = null) {
             if (cnpjLimpo.length === 14) {
                 const dadosCnpj = await consultarCnpj(cnpjLimpo);
                 if (dadosCnpj) {
-                    data.tomador.razao_social =
-                        data.tomador.razao_social || dadosCnpj.razao_social;
+                    // Receita Federal é a fonte de verdade — SEMPRE sobrescreve
+                    // o que o LLM "leu" da imagem, mesmo que ele tenha extraído
+                    // um nome diferente (alucinação ou imagem ambígua).
+                    data.tomador.razao_social = dadosCnpj.razao_social;
                     data.tomador.endereco = {
                         cep: dadosCnpj.cep,
                         numero: dadosCnpj.numero || "S/N",

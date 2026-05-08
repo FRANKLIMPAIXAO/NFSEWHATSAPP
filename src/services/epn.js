@@ -159,11 +159,13 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                 percentualTotalTributosMunicipais: Number(empresa.aliquota_iss) || 0,
             },
 
-            // Bloco ibsCbs no nível do infDps — campos da Reforma Tributária.
+            // Bloco ibsCbs no nível do infDps — campos da Reforma Tributária (LC 214/2025).
             // finNFSe = "0" (NFS-e regular), indDest = "0" (destinatário = tomador),
             // indFinal = "0" (não é consumo pessoal). cIndOp deve sair do Anexo VII.
-            // valores.trib.gIBSCBS exigido pela lib — defaults seguros pra serviço
-            // comum tributado: CST 000 = tributação plena, cClassTrib 010100 = serviços em geral.
+            // CST 000 = Tributação Integral pelo IBS e CBS.
+            // cClassTrib 000001 = "Situações tributadas integralmente pelo IBS e CBS" — único
+            // código válido pra CST 000 em serviço comum (Informe Técnico RT 2025.002).
+            // SEFAZ valida o par (CST, cClassTrib) e retorna E0959 se incompatível.
             ibsCbs: {
                 finNFSe: "0",
                 cIndOp: "100000", // operação interna padrão; consultar Anexo VII pra casos especiais
@@ -173,7 +175,7 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                     trib: {
                         gIBSCBS: {
                             CST: "000",
-                            cClassTrib: "010100",
+                            cClassTrib: "000001",
                         },
                     },
                 },
