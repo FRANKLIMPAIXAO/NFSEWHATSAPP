@@ -34,6 +34,31 @@ function buildContext(empresa) {
 }
 
 /**
+ * Monta o endereço do prestador (enderNac) a partir do que está cadastrado
+ * em `empresa`. Devolve undefined se faltar IBGE — sem cMun o XSD rejeita.
+ */
+function prestadorEnderecoFromEmpresa(empresa) {
+    if (!empresa.municipio_codigo) return undefined;
+    let endJson = {};
+    if (empresa.endereco_json) {
+        try {
+            endJson = JSON.parse(empresa.endereco_json);
+        } catch {
+            endJson = {};
+        }
+    }
+    return {
+        xLgr: endJson.logradouro || "",
+        nro: endJson.numero || "S/N",
+        ...(endJson.complemento && { xCpl: endJson.complemento }),
+        xBairro: endJson.bairro || "",
+        cMun: empresa.municipio_codigo,
+        uf: empresa.uf || "",
+        cep: String(endJson.cep || "").replace(/\D/g, ""),
+    };
+}
+
+/**
  * Emite NFS-e via API direta da SEFIN Nacional.
  *
  * @param {Object} params
@@ -66,6 +91,10 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                 cnpj: empresa.cnpj,
                 ...(empresa.inscricao_municipal && {
                     inscricaoMunicipal: empresa.inscricao_municipal,
+                }),
+                nome: empresa.razao_social,
+                ...(prestadorEnderecoFromEmpresa(empresa) && {
+                    endereco: prestadorEnderecoFromEmpresa(empresa),
                 }),
                 regimeTributario: {
                     // opSimpNac: 1=Não Optante | 2=MEI | 3=ME/EPP optante (XSD).
@@ -131,6 +160,9 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                 issqn: {
                     tributacaoIssqn: TributacaoIssqn.TributadaMunicipioPrestador,
                     tipoRetencaoIssqn: TipoRetencaoIssqn.NaoRetido,
+                    // pAliq em decimal (0.05 = 5%); empresa.aliquota_iss é em %
+                    aliquota: (Number(empresa.aliquota_iss) || 0) / 100,
+                    exigibilidadeISS: 1, // 1 = ISS exigível (default pra serviço comum)
                 },
                 federal: { cstPisCofins: "00" },
                 percentualTotalTributosFederais: 0,
