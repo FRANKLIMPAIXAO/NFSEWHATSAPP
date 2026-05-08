@@ -236,18 +236,140 @@ Manda "Sim" no WhatsApp em seguida.
 
 ---
 
+## Problema 4 — `cServTribNac` undefined no payload EPN
+
+### Sintoma
+Após cert OK e empresa identificada, emissão falhava com:
+```
+DPS inválido — 1 erro(s):
+  • [infDps.servico.codigoServico.cServTribNac] Invalid input: expected string, received undefined
+```
+
+### Causa
+O extractor produz `codigo_lc116` (formato LC 116/2003 ex `"14.01"`), mas o EPN exige `cServTribNac` (formato pós-Reforma, ex `"140101"`). Os scripts de teste mascaravam fazendo o fallback manualmente. O webhook em produção passava `payload.servico` direto sem fallback.
+
+### Solução (commit `828fafb`)
+No `emissor.js` (caminho EPN), antes de chamar `emitirEpn`, fazer fallback:
+```js
+codigo_servico_nacional:
+  servico.codigo_servico_nacional ||
+  empresa.servico_padrao_lc116 ||
+  null
+```
+Se nem isso vier, lança erro descritivo em vez de deixar a SEFAZ rejeitar opacamente.
+
+---
+
+## Problema 5 — Endereço do tomador faltando
+
+### Sintoma
+```
+DPS inválido: Endereço do tomador é obrigatório quando o tomador é identificado.
+```
+
+### Causa
+Extractor não pedia endereço do tomador, então pra tomador PF (CPF) o payload ia sem `tomador.endereco`.
+
+### Solução (commit `a68256c` + refinamentos `192eb03`, `0ef2a5a`)
+3 mudanças encadeadas:
+
+1. **`prompts/extractor.js`** — adiciona `tomador.endereco` (cep+numero) como obrigatório quando tomador tem documento. Marca `status=incomplete` se faltar.
+2. **`services/viacep.js`** (novo) — resolve CEP em logradouro/bairro/município/UF/IBGE via API ViaCEP. Timeout 5s, fail-soft com warn.
+3. **`services/extractor.js`** — pós-processamento: se LLM extraiu CEP, chama ViaCEP e completa. Se CEP inválido, força `incomplete` com mensagem clara pro usuário corrigir.
+4. **`services/epn.js`** — mapeia `tomador.endereco` pro formato `EnderecoData` (xLgr/nro/cMun/uf/cep/...) que a SEFAZ espera.
+5. **`services/emissor.js`** — validação rigorosa antes de chamar EPN: exige cep, numero, logradouro, bairro, ibge/municipio, uf não-vazios. Se faltar qualquer, erro descritivo.
+6. Prompt explicita pro LLM **NÃO inventar** logradouro/bairro/UF — sistema resolve via ViaCEP. (Sem isso, o LLM "alucinava": criou `"Rua 13"` sem base, deixou bairro null → SEFAZ rejeitou).
+
+---
+
+## Feature 6 — Tomador PJ via CNPJ (BrasilAPI)
+
+### Motivação
+Pra tomador PJ, é UX horrível pedir endereço. Solução: usuário só informa o CNPJ, sistema consulta a Receita Federal.
+
+### Implementação (commit `530e42d`)
+1. **`services/cnpj-lookup.js`** (novo) — wrapper sobre BrasilAPI (`https://brasilapi.com.br/api/cnpj/v1/{cnpj}`). Gratuita, sem auth, mas requer User-Agent (sem ele retorna 403). Retorna razão social + endereço completo + IBGE + situação cadastral.
+2. **`services/extractor.js`** — pós-processamento PJ: se tomador é PJ + tem 14 dígitos, chama BrasilAPI e completa razão social + endereço. Se não encontrado, força `incomplete`. Se situação não-ATIVA, sinaliza em `observacoes`.
+3. **`prompts/extractor.js`** — instrução clara: pra PJ, NÃO extrair endereço (sistema completa pelo CNPJ); só pra PF é que CEP+número são obrigatórios.
+
+### Resultado
+```
+Você: "Emite nota R$1500 pra CNPJ 63052142000112 consultoria"
+Bot:  "NFS-e para ROCA LTDA (...). Confirma?"  ← consultou Receita
+```
+
+---
+
+## Auditoria 7 — Padrão Nacional XML oficial vs nosso payload (commits `e904ef7`, `849a771`)
+
+Usuário compartilhou repo oficial `github.com/VenturaCerqueira/NFS-e-novo` e PDF `Padrão Nacional.xml`. Auditoria campo por campo do XSD revelou 5 gaps (já em homologação aceitava, mas produção pode/deve exigir):
+
+1. **`prestador.inscricaoMunicipal`** — empresa.inscricao_municipal cadastrado no DB mas não enviado.
+2. **`prestador.nome`** (xNome) — razão social do prestador, não estávamos enviando.
+3. **`prestador.endereco`** (enderNac) — endereço do prestador, não estávamos enviando. Helper `prestadorEnderecoFromEmpresa()` faz parse de `empresa.endereco_json` + `municipio_codigo` + `uf`.
+4. **`tributacao.issqn.aliquota`** (pAliq) — alíquota como decimal (0.05 pra 5%). Estávamos enviando só o totalizador.
+5. **`tributacao.issqn.exigibilidadeISS`** — default 1 (exigível).
+
+Bloco IBS/CBS Reforma Tributária com defaults seguros pra serviço comum:
+- `infDps.ibsCbs.finNFSe = "0"` (NFS-e regular)
+- `infDps.ibsCbs.cIndOp = "100000"` (operação interna padrão; Anexo VII pra casos especiais)
+- `infDps.ibsCbs.indDest = "0"` (destinatário = tomador)
+- `infDps.ibsCbs.indFinal = "0"` (não é consumo pessoal)
+- `valores.trib.gIBSCBS.CST = "000"` (tributação plena)
+- `valores.trib.gIBSCBS.cClassTrib = "010100"` (serviços em geral)
+
+**Casos especiais NÃO cobertos (TODO quando aparecer caso real):** exportação (CST 200), imunidade (300), ZFM, ente governamental, intermediário, obra/evento, retenções federais (vRetIRRF/vRetCSLL), tomador estrangeiro com NIF.
+
+---
+
+## Confirmação de ambiente — Homologação
+
+Chave de acesso da nota emitida: `52087072263052142000112000000000000626058358138896`
+
+Decodificada:
+| Posição | Valor | Significado |
+|---|---|---|
+| 1-7 | `5208707` | Goiânia/GO |
+| 8 | **`2`** | **tpAmb = 2 → HOMOLOGAÇÃO** (1=Produção) |
+| 9 | `2` | tpInsc (CNPJ) |
+| 10-23 | `63052142000112` | CNPJ Roca |
+| 24-49 | sequencial + DV | (zeros à esquerda típicos de homologação) |
+
+Nota é fake (sem valor fiscal). Confirma URL `adn.producaorestrita.nfse.gov.br` no `.env`.
+
+---
+
 ## Resumo de commits desta sessão
 
 | Hash | Descrição |
 |---|---|
 | `7c637fb` | fix(webhook): normaliza nono dígito do celular brasileiro na busca de empresa |
 | `aa6a463` | feat(boot): restaura .p12 ausente a partir de env var no startup |
+| `43a4f59` | docs: atualiza sessão 07/05 com problema 3 |
+| `828fafb` | fix(emissor): preenche codigo_servico_nacional no fluxo EPN com fallback da empresa |
+| `a68256c` | feat(tomador): exige endereço quando tomador identificado, resolve CEP via ViaCEP |
+| `192eb03` | fix(emissor): validação rigorosa do endereço do tomador antes de chamar EPN |
+| `0ef2a5a` | fix(extractor): resolve CEP via ViaCEP no pós-processamento e detecta CEP inválido |
+| `530e42d` | feat(tomador-pj): consulta automática de CNPJ via BrasilAPI |
+| `e904ef7` | feat(epn): inclui IM do prestador e bloco IBS/CBS da Reforma Tributária |
+| `849a771` | feat(epn): completa prestador (nome+endereço) e tributacao.issqn (alíquota+exigibilidade) |
+
+---
+
+## Pendências ao final da sessão
+
+1. **Erro com áudio** — usuário reportou "no áudio dá um erro" mas faltou diagnóstico (rodar query de eventos `transcricao`/`extracao` no DB pra ver o que falhou).
+2. **`scripts/cadastrar-empresa.js` genérico** — pedido pelo usuário, não foi criado. Útil pra onboarding de futuras empresas.
+3. **Ligar produção** — quando confiante: `EPN_AMBIENTE=producao` no EasyPanel. Pré-req: cert habilitado pra produção (não só restrita) + Roca aderiu ao EPN no portal nfse.gov.br.
+4. **Casos especiais Reforma Tributária** — exportação, imunidade, ZFM, ente governamental, intermediação, obra/evento, retenções federais.
 
 ---
 
 ## Notas e referências
 
-- **Empresa-piloto**: Centro Automotivo El Shadai (Aparecida de Goiânia) — primeira empresa cadastrada no agent-nfse (id=2 com CNPJ de teste, ainda não emite em produção real).
-- **Empresa em produção real**: Roca Serviço LTDA (id=3, CNPJ `63052142000112`).
-- **Stack**: SQLite (better-sqlite3) + Node 20 Alpine + Chromium nativo + Puppeteer (DANFE PDF) + EPN (mTLS direto SEFAZ Nacional).
-- **Host**: EasyPanel + Supabase (sistema PAC no Bolso, integrando com este agente WhatsApp).
+- **Empresas no DB local**: id=1 Jovelino e Acilda (El Shadai/Aparecida, focus), id=2 ROCA LTDA (Goiânia, EPN).
+- **Empresas no servidor EasyPanel**: id=2 PAC Contabilidade Teste (CNPJ fictício, focus), id=3 ROCA LTDA (Goiânia, EPN).
+- **Stack**: SQLite (better-sqlite3) + Node 20 Alpine + Chromium nativo + Puppeteer (DANFE PDF) + lib `nfse-nacional` (mTLS direto SEFAZ Nacional).
+- **Host**: EasyPanel auto-deploy do branch `main` em `github.com/FRANKLIMPAIXAO/NFSEWHATSAPP`.
+- **Repo oficial referência**: `github.com/VenturaCerqueira/NFS-e-novo` (XSDs, manuais, exemplos).
+- **PDF de referência local**: `/Users/franklimpaixao/Documents/MENTORIA FAMILIA TRIBUTARIA/padraonacional.pdf` (XML DPS exemplo, 2 páginas).
