@@ -103,11 +103,10 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                 ...(empresa.inscricao_municipal && empresa.municipio_no_cnc && {
                     inscricaoMunicipal: empresa.inscricao_municipal,
                 }),
-                nome: empresa.razao_social,
-                // E0128: quando o prestador é o emitente (tpEmit=1), NÃO se
-                // envia endereço — a SEFAZ usa o cadastro pelo CNPJ. Endereço
-                // do prestador no DPS só faz sentido quando o emitente é o
-                // tomador (tpEmit=2) ou intermediário (tpEmit=3).
+                // E0121 / E0128: quando o prestador é o emitente (tpEmit=1),
+                // NÃO se envia nome NEM endereço — a SEFAZ usa o cadastro pelo
+                // CNPJ. Esses campos só vão quando o emitente é o tomador
+                // (tpEmit=2) ou intermediário (tpEmit=3).
                 regimeTributario: {
                     // opSimpNac: 1=Não Optante | 2=MEI | 3=ME/EPP optante (XSD).
                     opSimpNac: optante
