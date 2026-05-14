@@ -305,6 +305,31 @@ export async function emitirNFSe({
             statusCode: err.statusCode,
             sefazBody: sefazBody?.slice(0, 2000),
         });
+        // Quando há sefazBody parseável, é rejeição de validação da SEFAZ —
+        // devolve com mensagem legível ao invés de cair no catch genérico do
+        // webhook (que mostra "erro técnico" pro cliente). Só faz throw pra
+        // erros sem body (rede, timeout, cert) — esses sim merecem fallback.
+        if (sefazBody) {
+            let msgSefaz = `Erro ${err.statusCode || "?"}: ${err.message}`;
+            try {
+                const parsed = JSON.parse(sefazBody);
+                if (Array.isArray(parsed.erros) && parsed.erros.length) {
+                    msgSefaz = parsed.erros
+                        .map((e) => `${e.Codigo}: ${e.Descricao}`)
+                        .join("; ");
+                }
+            } catch {
+                // sefazBody pode não ser JSON em casos raros
+            }
+            return {
+                ok: false,
+                notaId,
+                referencia,
+                emissor,
+                status: "rejeitada",
+                erro: msgSefaz,
+            };
+        }
         throw err;
     }
 }
