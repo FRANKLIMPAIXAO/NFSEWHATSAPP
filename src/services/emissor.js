@@ -96,6 +96,30 @@ export async function emitirNFSe({
     const referencia = novaReferencia(empresa);
     competencia = competencia || new Date().toISOString().slice(0, 10);
 
+    // E0015: SEFAZ rejeita se dCompet > dhEmi. Validar localmente evita ida
+    // perdida à SEFAZ e dá mensagem amigável pro cliente.
+    const hojeIso = new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(competencia)) {
+        return {
+            ok: false,
+            notaId: null,
+            referencia,
+            emissor,
+            status: "rejeitada",
+            erro: `Data de competência (${competencia}) com formato inválido. Esperado YYYY-MM-DD.`,
+        };
+    }
+    if (competencia > hojeIso) {
+        return {
+            ok: false,
+            notaId: null,
+            referencia,
+            emissor,
+            status: "rejeitada",
+            erro: `Data de competência (${competencia}) não pode ser posterior à data de hoje (${hojeIso}). Confirma a data correta do serviço?`,
+        };
+    }
+
     const notaId = persistirInicio({
         empresa,
         tomador,

@@ -69,7 +69,15 @@ CAMPOS QUE VOCÊ DEVE EXTRAIR:
      Use o código mais específico que conseguir inferir. Se incerto, sinalize ambiguidade.
    - valor_total: número decimal. Aceite "quinhentos", "1k", "1.500,00", "R$ 500", etc.
 
-3. COMPETÊNCIA: data do serviço. Se não mencionado, use a data fornecida no input.
+3. COMPETÊNCIA: data em que o serviço foi prestado (YYYY-MM-DD).
+   - REGRA DURA: a competência NUNCA pode ser FUTURA (posterior à data fornecida no input).
+     A SEFAZ rejeita com E0015 se dCompet > dhEmi.
+   - Se o cliente não mencionar data, use a data do input (hoje).
+   - Se o cliente mencionar mês/data posterior ao input (ex: "competência junho" quando
+     o input é maio), trate como ambiguidade — status = "ambiguous" e descreva em
+     ambiguidades. NÃO mande data futura sob hipótese alguma.
+   - Aceite expressões relativas comuns ("ontem", "semana passada", "mês passado") e
+     converta pra data concreta no passado, sempre relativa à data do input.
 
 REGRAS DE QUALIDADE:
 
