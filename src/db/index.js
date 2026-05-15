@@ -53,6 +53,16 @@ ensureColumn("empresas", "municipio_no_cnc", "INTEGER NOT NULL DEFAULT 0");
 //   030101 = Inc. III, demais serviços, estab. fornecedor (consultoria comum)
 //   100301 = Inc. X, serviços à distância, domicílio do adquirente
 ensureColumn("empresas", "cind_op_padrao", "TEXT");
+// UUID da empresa no Supabase (Pac no Bolso). Quando preenchido, a row é
+// "mirror" — serve só de âncora pras foreign keys (conversas, notas_emitidas,
+// eventos) que exigem empresa_id INTEGER. A fonte da verdade dos dados é o
+// Supabase; o mirror é re-sincronizado a cada mensagem via supabase-repo.
+ensureColumn("empresas", "supabase_id", "TEXT");
+db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_empresas_supabase_id
+    ON empresas(supabase_id)
+    WHERE supabase_id IS NOT NULL
+`);
 
 // =============================================================
 // EMPRESAS
@@ -106,6 +116,59 @@ export const insertEmpresa = db.prepare(`
          municipio_codigo, municipio_nome, uf, inscricao_municipal, endereco_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
+
+// -------- Mirror Supabase --------
+const findMirrorBySupabaseIdStmt = db.prepare(
+    "SELECT id FROM empresas WHERE supabase_id = ?"
+);
+const insertMirrorStmt = db.prepare(`
+    INSERT INTO empresas
+        (cnpj, razao_social, nome_fantasia, whatsapp_dono, focus_token,
+         regime, aliquota_iss, servico_padrao_lc116,
+         municipio_codigo, municipio_nome, uf, inscricao_municipal, endereco_json,
+         supabase_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+/**
+ * Garante uma row mirror no SQLite local pra uma empresa que veio do Supabase.
+ * Retorna o `id INTEGER` da row local — usado nas foreign keys de conversas,
+ * notas_emitidas e eventos. Idempotente: se já existe mirror pra esse
+ * supabase_id, devolve o existente sem re-inserir.
+ *
+ * whatsapp_dono fica `supa:<uuid>` (placeholder único) pra NÃO bater com
+ * findEmpresaByWhatsapp do fallback SQLite — assim Roca/El Shadai continuam
+ * sendo identificadas pelo número real, e clientes do Pac vêm só via Supabase.
+ *
+ * @param {object} empresaSupa — objeto saído de supabaseRowToEmpresa
+ * @returns {number} id INTEGER local
+ */
+export function getOrCreateMirrorEmpresa(empresaSupa) {
+    const supabaseId = empresaSupa.id;
+    if (!supabaseId) {
+        throw new Error("getOrCreateMirrorEmpresa: empresa sem id (UUID)");
+    }
+    const existing = findMirrorBySupabaseIdStmt.get(supabaseId);
+    if (existing) return existing.id;
+
+    const result = insertMirrorStmt.run(
+        empresaSupa.cnpj,
+        empresaSupa.razao_social,
+        empresaSupa.nome_fantasia,
+        `supa:${supabaseId}`,
+        empresaSupa.focus_token || "-",
+        empresaSupa.regime || "simples_nacional",
+        Number(empresaSupa.aliquota_iss) || 0,
+        empresaSupa.servico_padrao_lc116,
+        empresaSupa.municipio_codigo,
+        null,
+        empresaSupa.uf,
+        empresaSupa.inscricao_municipal,
+        empresaSupa.endereco_json,
+        supabaseId
+    );
+    return result.lastInsertRowid;
+}
 
 // =============================================================
 // CONVERSAS

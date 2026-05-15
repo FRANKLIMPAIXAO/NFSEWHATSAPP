@@ -23,6 +23,7 @@ import {
     registrarMensagemProcessada,
     logEvento,
     mesmoNumeroBr,
+    getOrCreateMirrorEmpresa,
 } from "../db/index.js";
 import { findEmitenteByWhatsapp } from "../db/supabase-repo.js";
 import { supabaseRowToEmpresa } from "../db/empresa-adapter.js";
@@ -103,7 +104,16 @@ export async function handleWebhook(evt) {
     let empresa = null;
     try {
         const row = await findEmitenteByWhatsapp(numero);
-        if (row) empresa = supabaseRowToEmpresa(row);
+        if (row) {
+            empresa = supabaseRowToEmpresa(row);
+            // Empresa do Supabase tem `id` UUID. As tabelas conversas/notas/
+            // eventos do SQLite usam FK pra empresas(id) INTEGER — então
+            // criamos/usamos um mirror local e trocamos o id pelo INTEGER.
+            // _supabaseId guarda o UUID original pra futura escrita em
+            // poupeja_nfse (etapa 6 do refactor).
+            empresa._supabaseId = empresa.id;
+            empresa.id = getOrCreateMirrorEmpresa(empresa);
+        }
     } catch (err) {
         logger.error(
             { err: err.message, numero },
