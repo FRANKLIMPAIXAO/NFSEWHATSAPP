@@ -23,6 +23,7 @@
     "openai": "^4.73.0",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",
+    "ws": "^8.20.1",
     "xml-crypto": "^6.1.2",
     "xmlbuilder2": "^4.0.3"
   },

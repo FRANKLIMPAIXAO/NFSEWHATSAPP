@@ -8,6 +8,7 @@
  * em prod não são afetadas).
  */
 import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
 import { logger } from "./utils/logger.js";
 
 const url = process.env.SUPABASE_URL;
@@ -16,8 +17,13 @@ const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 let client = null;
 
 if (url && serviceKey) {
+    // Node 20 não tem WebSocket nativo (só veio em 22+). O sub-módulo
+    // realtime-js do @supabase/supabase-js crasha no construtor sem isso.
+    // Não usamos realtime, mas o createClient instancia mesmo assim — então
+    // injetamos `ws` como transporte pra não derrubar o startup do agent.
     client = createClient(url, serviceKey, {
         auth: { persistSession: false, autoRefreshToken: false },
+        realtime: { transport: ws },
     });
     logger.info({ url }, "supabase: cliente inicializado");
 } else {
