@@ -24,6 +24,8 @@ import {
     logEvento,
     mesmoNumeroBr,
 } from "../db/index.js";
+import { findEmitenteByWhatsapp } from "../db/supabase-repo.js";
+import { supabaseRowToEmpresa } from "../db/empresa-adapter.js";
 import { transcrever } from "../services/whisper.js";
 import { extrairCampos } from "../services/extractor.js";
 import { emitirNFSe } from "../services/emissor.js";
@@ -94,7 +96,22 @@ export async function handleWebhook(evt) {
     }
 
     // ---------- 2. IDENTIFICAR EMPRESA ----------
-    const empresa = findEmpresaByWhatsapp.get(numero);
+    // Estratégia dual-mode: tenta Supabase (Pac no Bolso) primeiro.
+    // Se Supabase está desligado, não acha o número, ou falha → cai pro
+    // SQLite local. Garante que Roca/El Shadai (cadastradas só no SQLite)
+    // continuem funcionando enquanto novos clientes vêm pelo painel do Pac.
+    let empresa = null;
+    try {
+        const row = await findEmitenteByWhatsapp(numero);
+        if (row) empresa = supabaseRowToEmpresa(row);
+    } catch (err) {
+        logger.error(
+            { err: err.message, numero },
+            "supabase: falha buscando emitente, caindo pra SQLite"
+        );
+    }
+    if (!empresa) empresa = findEmpresaByWhatsapp.get(numero);
+
     if (!empresa) {
         await enviarTexto(
             numero,
