@@ -126,15 +126,31 @@ const insertMirrorStmt = db.prepare(`
         (cnpj, razao_social, nome_fantasia, whatsapp_dono, focus_token,
          regime, aliquota_iss, servico_padrao_lc116,
          municipio_codigo, municipio_nome, uf, inscricao_municipal, endereco_json,
+         emissor, cert_pfx_path, cert_pfx_password, codigo_nbs_padrao,
+         cind_op_padrao, municipio_no_cnc,
          supabase_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const updateMirrorStmt = db.prepare(`
+    UPDATE empresas
+    SET razao_social = ?, nome_fantasia = ?, focus_token = ?,
+        regime = ?, aliquota_iss = ?, servico_padrao_lc116 = ?,
+        municipio_codigo = ?, uf = ?, inscricao_municipal = ?, endereco_json = ?,
+        emissor = ?, cert_pfx_path = ?, cert_pfx_password = ?,
+        codigo_nbs_padrao = ?, cind_op_padrao = ?, municipio_no_cnc = ?,
+        atualizada_em = datetime('now')
+    WHERE id = ?
 `);
 
 /**
  * Garante uma row mirror no SQLite local pra uma empresa que veio do Supabase.
  * Retorna o `id INTEGER` da row local — usado nas foreign keys de conversas,
- * notas_emitidas e eventos. Idempotente: se já existe mirror pra esse
- * supabase_id, devolve o existente sem re-inserir.
+ * notas_emitidas e eventos.
+ *
+ * Comportamento: SINCRONIZA todos os campos relevantes a cada chamada
+ * (não é "find or skip"). Garante que o mirror reflete o estado atual do
+ * Supabase — se você mudar emissor/cert/IM no painel do Pac, próxima
+ * mensagem do cliente já pega os valores novos.
  *
  * whatsapp_dono fica `supa:<uuid>` (placeholder único) pra NÃO bater com
  * findEmpresaByWhatsapp do fallback SQLite — assim Roca/El Shadai continuam
@@ -149,8 +165,28 @@ export function getOrCreateMirrorEmpresa(empresaSupa) {
         throw new Error("getOrCreateMirrorEmpresa: empresa sem id (UUID)");
     }
     const existing = findMirrorBySupabaseIdStmt.get(supabaseId);
-    if (existing) return existing.id;
-
+    if (existing) {
+        updateMirrorStmt.run(
+            empresaSupa.razao_social,
+            empresaSupa.nome_fantasia,
+            empresaSupa.focus_token || "-",
+            empresaSupa.regime || "simples_nacional",
+            Number(empresaSupa.aliquota_iss) || 0,
+            empresaSupa.servico_padrao_lc116,
+            empresaSupa.municipio_codigo,
+            empresaSupa.uf,
+            empresaSupa.inscricao_municipal,
+            empresaSupa.endereco_json,
+            empresaSupa.emissor || "focus",
+            empresaSupa.cert_pfx_path,
+            empresaSupa.cert_pfx_password,
+            empresaSupa.codigo_nbs_padrao,
+            empresaSupa.cind_op_padrao,
+            empresaSupa.municipio_no_cnc ? 1 : 0,
+            existing.id
+        );
+        return existing.id;
+    }
     const result = insertMirrorStmt.run(
         empresaSupa.cnpj,
         empresaSupa.razao_social,
@@ -165,6 +201,12 @@ export function getOrCreateMirrorEmpresa(empresaSupa) {
         empresaSupa.uf,
         empresaSupa.inscricao_municipal,
         empresaSupa.endereco_json,
+        empresaSupa.emissor || "focus",
+        empresaSupa.cert_pfx_path,
+        empresaSupa.cert_pfx_password,
+        empresaSupa.codigo_nbs_padrao,
+        empresaSupa.cind_op_padrao,
+        empresaSupa.municipio_no_cnc ? 1 : 0,
         supabaseId
     );
     return result.lastInsertRowid;
