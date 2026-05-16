@@ -157,7 +157,13 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         incentivador_cultural: false,
         prestador: {
             cnpj: empresa.cnpj,
-            inscricao_municipal: inscricaoMunicipal || undefined,
+            // IM só pode ser enviada se município está integrado ao CNC NFS-e
+            // Nacional. Caso contrário SEFAZ retorna E0120 ("IM do prestador
+            // não deve ser informado"). Goiânia/Aparecida hoje (mai/2026)
+            // estão FORA do CNC — empresa.municipio_no_cnc=false → omite IM.
+            inscricao_municipal: empresa.municipio_no_cnc
+                ? inscricaoMunicipal || undefined
+                : undefined,
             codigo_municipio: empresa.municipio_codigo,
         },
         tomador: {
