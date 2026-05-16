@@ -110,25 +110,38 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             item_lista_servico: codigoServico6Digitos(servico.codigo_lc116),
             codigo_tributario_municipio:
                 servico.codigo_tributario_municipio || undefined,
+            codigo_municipio: empresa.municipio_codigo,
             valor_servicos: servico.valor_total,
-            // Campos federais — Focus exige preencher (mesmo zerados pra Simples
-            // Nacional) quando converte o payload municipal pro padrão Nacional
-            // pós-Reforma. Sem isso o XSD do <trib> rejeita por faltar tribFed
-            // ou totTrib. Pra Simples ME/EPP, ISS+demais tributos saem via DAS
-            // — valores zerados na nota refletem isso corretamente.
+            // Campos federais — zerados pro Simples Nacional (tributos saem via DAS).
             valor_pis: 0,
             valor_cofins: 0,
             valor_inss: 0,
             valor_ir: 0,
             valor_csll: 0,
-            aliquota_pis: 0,
-            aliquota_cofins: 0,
-            aliquota_inss: 0,
-            aliquota_ir: 0,
-            aliquota_csll: 0,
-            valor_outras_retencoes: 0,
-            descontos_condicionados: 0,
-            descontos_incondicionados: 0,
+            outras_retencoes: 0,
+            desconto_incondicionado: 0,
+            desconto_condicionado: 0,
+            // Lei da Transparência (gera <totTrib> no XML padrão Nacional).
+            // Pra Simples Nacional, estimativa IBPT ~6% (faixa típica ME/EPP serviços).
+            percentual_total_tributos: optanteSimples ? 6.0 : 0,
+            fonte_total_tributos: "IBPT",
+            // Reforma Tributária — campos IBS/CBS (gera <gIBSCBS> no XML).
+            // Pra Simples Nacional: CST=200, cClassTrib=200052 (referência XML
+            // real de empresa do nicho). Alíquotas zeradas porque tributos
+            // continuam via DAS no Simples.
+            codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
+            ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
+            ibs_cbs_classificacao_tributaria: optanteSimples
+                ? "200052"
+                : undefined,
+            ibs_cbs_base_calculo: servico.valor_total,
+            ibs_uf_aliquota: 0,
+            ibs_mun_aliquota: 0,
+            cbs_aliquota: 0,
+            ibs_uf_valor: 0,
+            ibs_mun_valor: 0,
+            cbs_valor: 0,
+            codigo_nbs: empresa.codigo_nbs_padrao || undefined,
         },
     };
 }
