@@ -92,11 +92,12 @@ export function supabaseRowToEmpresa(row) {
         cep: String(row.cep || "").replace(/\D/g, ""),
     });
 
-    // Focus token: usa producao ou homologacao baseado em FOCUS_AMBIENTE.
+    // Focus token: usa producao ou homologacao baseado em FOCUS_NFE_ENV
+    // (mesma env que focusnfe.js consome — alinha com convenção existente).
     // Se o cliente é puro EPN, esses campos são null e o focus_token sai null
     // (não usado).
     const focusAmbiente =
-        process.env.FOCUS_AMBIENTE === "producao" ? "producao" : "homologacao";
+        process.env.FOCUS_NFE_ENV === "producao" ? "producao" : "homologacao";
     const focus_token =
         focusAmbiente === "producao"
             ? row.focus_token_producao
