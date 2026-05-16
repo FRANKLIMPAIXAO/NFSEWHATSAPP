@@ -193,10 +193,11 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             codigo_cnae: empresa.cnae || undefined,
             codigo_municipio: empresa.municipio_codigo,
             // Lei da Transparência (Lei 12.741) — XSD Nacional pós-Reforma
-            // exige <trib> com <tribFed> ou <totTrib>. Doc Focus oficial
-            // tem apenas 2 campos: percentual_total_tributos + fonte.
-            // Simples Nacional paga DAS à parte — 0% informativo é aceito.
-            percentual_total_tributos: 0,
+            // exige <trib> com <tribFed> ou <totTrib>. Focus só gera totTrib
+            // se percentual_total_tributos > 0 (valor 0 é tratado como vazio).
+            // Pra Simples Nacional, usa alíquota DAS aprox do Anexo III
+            // (consultoria começa em ~6% no anexo) — IBPT publica tabelas.
+            percentual_total_tributos: aliquotaServico || 6,
             fonte_total_tributos: "IBPT",
         },
         numero: numeroRps,
