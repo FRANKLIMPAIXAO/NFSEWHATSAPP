@@ -87,15 +87,16 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // Item LC 116 — Focus exige formato 6 dígitos numéricos:
-    // "17.01" → "170100" (2 item + 2 subitem + 2 desdobro nacional pós-Reforma).
-    // Doc oficial Focus mostra exemplo "1.01" mas Focus rejeita com mensagem
-    // explícita: "O código é composto por 6 dígitos numéricos".
+    // Item LC 116 — Focus exige formato 6 dígitos numéricos pós-Reforma:
+    // "17.01" → "170100" (2 item + 2 subitem + 2 desdobro nacional).
     const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
-    // Código tributário municipal — Goiânia exige obrigatório, regra é
-    // "mesmo valor do item_lista_servico" (6 dígitos).
+    // Código tributário MUNICIPAL — XSD do <cTribMun> em Goiânia/ABRASF exige
+    // 4 dígitos (formato curto sem desdobro nacional): "17.01" → "1701".
+    // Erro do Focus 422 quando enviado 6 dígitos: "valor '171900' não aceito
+    // pelo pattern [0-9]{3}". Empresa pode sobrescrever com cadastro próprio.
     const codigoTributarioMunicipio =
-        servico.codigo_tributario_municipio || itemListaServico;
+        servico.codigo_tributario_municipio ||
+        String(servico.codigo_lc116 || "").replace(/\D/g, "").slice(0, 4);
 
     return {
         data_emissao: agoraBrtIso(),
@@ -103,6 +104,8 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         optante_simples_nacional: optanteSimples,
         incentivador_cultural: false,
         regime_especial_tributacao: optanteSimples ? 6 : undefined,
+        // Reforma Tributária — finalidade vem ANTES de cIndOp no XSD <IBSCBS>.
+        finalidade_emissao: "0",
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -119,9 +122,28 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             iss_retido: false,
             item_lista_servico: itemListaServico,
             codigo_tributario_municipio: codigoTributarioMunicipio,
-            // Goiânia exige CNAE obrigatoriamente (doc oficial Focus).
             codigo_cnae: empresa.cnae || undefined,
             valor_servicos: servico.valor_total,
+            // Lei da Transparência — gera <totTrib> no XML padrão Nacional.
+            // Goiânia exige esse bloco, mesmo sendo Simples Nacional. Estimativa
+            // IBPT ~6% (faixa típica ME/EPP serviços).
+            percentual_total_tributos: optanteSimples ? 6.0 : 0,
+            fonte_total_tributos: "IBPT",
+            // Reforma Tributária — bloco IBS/CBS.
+            // Pra Simples Nacional: CST=200, cClassTrib=200052 (referência XML real).
+            // Alíquotas zeradas (tributos saem via DAS no Simples).
+            codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
+            ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
+            ibs_cbs_classificacao_tributaria: optanteSimples
+                ? "200052"
+                : undefined,
+            ibs_cbs_base_calculo: servico.valor_total,
+            ibs_uf_aliquota: 0,
+            ibs_mun_aliquota: 0,
+            cbs_aliquota: 0,
+            ibs_uf_valor: 0,
+            ibs_mun_valor: 0,
+            cbs_valor: 0,
         },
     };
 }
