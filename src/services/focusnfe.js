@@ -41,19 +41,23 @@ function codigoServico6Digitos(codigo) {
     return d.padEnd(6, "0").slice(0, 6);
 }
 
-// MUNICIPAL (IssNet/ABRASF — Goiânia, etc): formato canônico LC 116 "X.XX"
-// (string com ponto). Validado com payload Base44 funcional em prod HC GESTAO.
-// "171901" → "17.19" | "1719" → "17.19" | "17.19" → "17.19" | "1.01" → "1.01"
-function itemListaServicoLC116(codigo) {
-    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
-    if (d.length < 3) return d;
-    return d.slice(0, -2) + "." + d.slice(-2);
-}
+// MUNICIPAL: Focus valida item_lista_servico em 6 dígitos numéricos puros
+// ("código composto por 6 dígitos: 2 Item + 2 Subitem + 2 Desdobro Nacional"),
+// independente do que o XSD do município diga. Reusa codigoServico6Digitos.
 
-// cTribMun no formato Base44: item_lista_servico sem o ponto.
-// "17.19" → "1719" | "1.01" → "101". Goiânia IssNet aceita 3 ou 4 dígitos.
-function codigoTribMunSemPonto(itemListaServico) {
-    return String(itemListaServico || "").replace(/[.\-]/g, "");
+// Normaliza discriminacao pro charset aceito pelo ABRASF de Goiânia (XSD
+// nfse_gyn_v02.xsd): "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&$%()/+-.,;:=* ".
+// Sem acentos, sem ç, sem minúsculas. Quebra de linha vira espaço.
+function normalizarDiscriminacao(texto) {
+    if (!texto) return "";
+    return String(texto)
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[çÇ]/g, "C")
+        .toUpperCase()
+        .replace(/[^A-Z0-9&$%()\/+\-.,;:=* ]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
 // Data/hora atual em horário de Brasília com TZD -03:00.
@@ -111,23 +115,33 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // Formato canônico LC 116: "X.XX" string (ex: "17.19"). Validado com
-    // payload Base44 funcional em prod HC GESTAO. Goiânia IssNet aceita.
-    const itemListaServico = itemListaServicoLC116(servico.codigo_lc116);
-    // cTribMun: item_lista_servico sem ponto. Override possível via servico.
+    // Focus valida item_lista_servico em 6 dígitos (independente de XSD do
+    // município). Goiânia internamente ignora — mas pra Focus passar pre-validação.
+    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
+
+    // cTribMun em Goiânia = código de Atividade Econômica de 9 dígitos
+    // cadastrado no perfil do prestador na prefeitura (NÃO é LC 116).
+    // Ordem de precedência:
+    //   1. servico.codigo_tributario_municipio (override por nota)
+    //   2. empresa.codigo_atividade_municipal (cadastrado no Pac)
+    //   3. fallback: 6 dígitos LC 116 (provavelmente Goiânia rejeita)
     const codigoTributarioMunicipio =
         servico.codigo_tributario_municipio ||
-        codigoTribMunSemPonto(itemListaServico);
+        empresa.codigo_atividade_municipal ||
+        itemListaServico;
 
-    // Número RPS único — timestamp em segundos. Pra controle sequencial
-    // próprio precisaria coluna numero_rps_atual na empresa (Base44 faz isso).
     const numeroRps = Math.floor(Date.now() / 1000);
 
     const tomadorEndereco = tomador.endereco || {};
+    const temEnderecoReal = !!(
+        tomadorEndereco.logradouro && tomadorEndereco.bairro
+    );
+
     const payload = {
         data_emissao: agoraBrtIso(),
+        // optante_simples_nacional: doc Goiânia diz não enviar, mas Focus usa
+        // pra normalizar alíquota/ISS. Mantemos.
         optante_simples_nacional: optanteSimples,
-        incentivador_cultural: false,
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -136,39 +150,40 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         tomador: {
             cnpj: tomador.tipo === "PJ" ? tomador.documento : undefined,
             cpf: tomador.tipo === "PF" ? tomador.documento : undefined,
-            razao_social: tomador.razao_social,
+            razao_social: tomador.razao_social || "Tomador nao informado",
             email: tomador.email || undefined,
-            endereco: {
-                logradouro: tomadorEndereco.logradouro || "Nao informado",
-                numero: tomadorEndereco.numero || "SN",
-                complemento: tomadorEndereco.complemento || undefined,
-                bairro: tomadorEndereco.bairro || "Centro",
-                codigo_municipio:
-                    tomadorEndereco.codigo_municipio ||
-                    tomadorEndereco.ibge ||
-                    empresa.municipio_codigo,
-                uf: tomadorEndereco.uf || empresa.uf || "GO",
-                cep: (tomadorEndereco.cep || "").replace(/\D/g, "") || undefined,
-            },
         },
         servico: {
             valor_servicos: servico.valor_total,
-            iss_retido: false,
             aliquota: aliquotaServico,
-            discriminacao: servico.descricao,
+            discriminacao: normalizarDiscriminacao(servico.descricao),
             item_lista_servico: itemListaServico,
             codigo_tributario_municipio: codigoTributarioMunicipio,
-            codigo_cnae: empresa.cnae || undefined,
             codigo_municipio: empresa.municipio_codigo,
         },
         numero: numeroRps,
         serie: "1",
     };
 
-    // Pra Simples Nacional NÃO enviar natureza_operacao (campo
-    // optante_simples_nacional já define o regime). Enviar quebra
-    // validação XSD pós-Reforma exigindo <trib><tribFed> ou <totTrib>.
-    // Convenção descoberta no payload Base44 funcional em prod HC GESTAO.
+    // Goiânia ABRASF v02: pra tomador PF sem endereço, NÃO enviar bloco
+    // <Endereco> (doc oficial XSD). Pra PJ ou PF com endereço completo, envia.
+    if (temEnderecoReal) {
+        payload.tomador.endereco = {
+            logradouro: tomadorEndereco.logradouro,
+            numero: tomadorEndereco.numero || "SN",
+            complemento: tomadorEndereco.complemento || undefined,
+            bairro: tomadorEndereco.bairro,
+            codigo_municipio:
+                tomadorEndereco.codigo_municipio ||
+                tomadorEndereco.ibge ||
+                empresa.municipio_codigo,
+            uf: tomadorEndereco.uf || empresa.uf || "GO",
+            cep: (tomadorEndereco.cep || "").replace(/\D/g, "") || undefined,
+        };
+    }
+
+    // Pra Simples Nacional NÃO enviar natureza_operacao (Base44 explícito:
+    // enviar quebra validação XSD exigindo <trib><tribFed>/<totTrib>).
     if (!optanteSimples) {
         payload.natureza_operacao = 1;
     }
