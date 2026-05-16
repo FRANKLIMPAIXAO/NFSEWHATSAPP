@@ -135,6 +135,10 @@ export function supabaseRowToEmpresa(row) {
         focus_token,
         codigo_tributacao_nacional: row.codigo_servico_nacional,
         cnae: row.cnae, // obrigatório pra Goiânia (e outros municípios ABRASF)
+        // Código de atividade econômica cadastrado na prefeitura (Goiânia
+        // exige no <cTribMun>). Sem isso, fallback pro LC 116 6 dígitos
+        // (provavelmente rejeitado pelo XSD municipal).
+        codigo_atividade_municipal: row.codigo_atividade_municipal || undefined,
         // usa_nfse_nacional: undefined → cai no env FOCUS_NFE_PADRAO
 
         // WhatsApp

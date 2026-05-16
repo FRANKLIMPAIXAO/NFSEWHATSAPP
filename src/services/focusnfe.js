@@ -155,6 +155,11 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         },
         servico: {
             valor_servicos: servico.valor_total,
+            // iss_retido obrigatório pra Focus mapear pro <tribMun><tpRetISSQN>
+            // do XSD pós-Reforma (sem ele Focus gera <tribMun> vazio e o
+            // validador acusa missing child: cPaisResult, tpImunidade,
+            // exigSusp, BM, tpRetISSQN).
+            iss_retido: false,
             aliquota: aliquotaServico,
             discriminacao: normalizarDiscriminacao(servico.descricao),
             item_lista_servico: itemListaServico,
