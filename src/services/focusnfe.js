@@ -41,25 +41,18 @@ function codigoServico6Digitos(codigo) {
     return d.padEnd(6, "0").slice(0, 6);
 }
 
-// MUNICIPAL (IssNet/ABRASF Goiânia): formato canônico LC 116 "X.XX" string
-// com ponto. Validado em XMLs reais de NFSe Goiânia (HC #15, Roca #11,
-// Centro Oeste #96 — todos com <ItemListaServico>17.01</ItemListaServico>
-// ou similar). NÃO usar 6 dígitos aqui — Focus pre-validation pediu 6 dig
-// na sessão anterior mas era por outro motivo (extractor mandando código
-// incorreto). Cadastro da empresa fornece o código certo.
-// "170100" → "17.01" | "1701" → "17.01" | "17.01" → "17.01"
-function itemListaServicoLC116(codigo) {
-    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
-    if (d.length < 3) return d;
-    return d.slice(0, -2) + "." + d.slice(-2);
-}
+// IMPORTANTE — Focus API vs XML final:
+// O JSON enviado pra Focus usa 6 DÍGITOS no item_lista_servico ("170100"),
+// e a Focus converte pra "X.XX" string ("17.01") no XML final pra Goiânia.
+// XMLs reais (HC #15, Roca #11, CO #96) mostram "17.01" no <ItemListaServico>
+// mas isso é o output da Focus, não o input. Mensagem 422 da Focus quando
+// recebe "X.XX": "código composto por 6 dígitos numéricos". Reusa
+// codigoServico6Digitos definido acima.
 
-// cTribMun em Goiânia: 4 dígitos sem ponto. Validado em XMLs reais:
-// <CodigoTributacaoMunicipio>1701</CodigoTributacaoMunicipio> pra HC.
-// Empresa cadastra via codigo_atividade_municipal no Pac (atividade econômica
-// real do cadastro municipal). Fallback: item_lista_servico sem ponto.
-function codigoTribMunGoiania(itemListaServico) {
-    return String(itemListaServico || "").replace(/[.\-]/g, "");
+// cTribMun: empresa.codigo_atividade_municipal vem do cadastro municipal
+// (HC = "1701"). Fallback: primeiros 4 dígitos do código do serviço.
+function codigoTribMunFallback4Dig(codigo6Dig) {
+    return String(codigo6Dig || "").slice(0, 4);
 }
 
 // Normaliza discriminacao pro charset aceito pelo ABRASF de Goiânia (XSD
@@ -132,21 +125,17 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // ItemListaServico formato "X.XX" string (validado em XMLs reais Goiânia).
+    // item_lista_servico: 6 dígitos no JSON pra Focus aceitar pre-validation.
     // Fonte: empresa.servico_padrao_lc116 (cadastrado no Pac) — emissor.js
     // já injeta no servico.codigo_lc116. Extractor LLM não é fonte confiável.
-    const itemListaServico = itemListaServicoLC116(servico.codigo_lc116);
+    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
 
-    // cTribMun: 4 dígitos sem ponto (validado em XMLs reais Goiânia "1701").
-    // Ordem de precedência:
-    //   1. servico.codigo_tributario_municipio (override por nota)
-    //   2. empresa.codigo_atividade_municipal (cadastrado no Pac, valor real)
-    //   3. fallback: item_lista_servico sem ponto (LC 116, pode não bater
-    //      com cadastro municipal mas Focus pode normalizar)
+    // cTribMun: empresa.codigo_atividade_municipal vem do cadastro municipal
+    // (HC = "1701"). XML final Goiânia tem 4 dig sem ponto.
     const codigoTributarioMunicipio =
         servico.codigo_tributario_municipio ||
         empresa.codigo_atividade_municipal ||
-        codigoTribMunGoiania(itemListaServico);
+        codigoTribMunFallback4Dig(itemListaServico);
 
     const numeroRps = Math.floor(Date.now() / 1000);
 

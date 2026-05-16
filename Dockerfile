@@ -37,7 +37,7 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 COPY --from=builder /app/node_modules ./node_modules
 
 # Cache-bust: incrementar quando precisar forçar rebuild fresh no EasyPanel
-ARG CACHEBUST=2026-05-16-14
+ARG CACHEBUST=2026-05-16-15
 RUN echo "cachebust=$CACHEBUST"
 
 # Código da aplicação (respeita .dockerignore)
