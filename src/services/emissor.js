@@ -14,6 +14,10 @@ import { emitirEpn, consultarEpn, cancelarEpn } from "./epn.js";
 import { gerarDanfse } from "./danfe.js";
 import { resolverCep } from "./viacep.js";
 import { logger } from "../utils/logger.js";
+import {
+    inserirNotaPendente,
+    atualizarNotaResultado,
+} from "../db/supabase-nota-repo.js";
 
 /**
  * Se o tomador tem CEP mas faltam logradouro/bairro/IBGE/UF, consulta ViaCEP
@@ -128,8 +132,20 @@ export async function emitirNFSe({
         conversaId,
     });
 
+    // Replicação no Supabase (Pac no Bolso) — só pra empresas vindas do Supabase
+    // (_supabaseId presente). Best-effort: se falhar, retorna null e seguimos só
+    // com o SQLite local como fonte de verdade. Atualizamos depois com status
+    // final em cada caminho de retorno (autorizada/rejeitada).
+    const supabaseNotaId = await inserirNotaPendente({
+        empresa,
+        tomador,
+        servico,
+        referencia,
+        competencia,
+    });
+
     logger.info(
-        { empresaId: empresa.id, emissor, referencia, notaId },
+        { empresaId: empresa.id, emissor, referencia, notaId, supabaseNotaId },
         "emitirNFSe: roteando"
     );
 
@@ -199,6 +215,11 @@ export async function emitirNFSe({
                     erro: erroMsg,
                     response,
                 });
+                await atualizarNotaResultado(supabaseNotaId, {
+                    status: "rejeitada",
+                    erro: erroMsg,
+                    response,
+                });
                 logEvento("emissao_rejeitada", empresa.id, conversaId, {
                     cStat: response.cStat,
                     xMotivo: response.xMotivo,
@@ -224,6 +245,15 @@ export async function emitirNFSe({
                 chave: response.chaveAcesso,
                 urlPdf: artefatos.pdfPath || artefatos.htmlPath || null,
                 urlXml: artefatos.xmlPath || null,
+                response,
+            });
+            await atualizarNotaResultado(supabaseNotaId, {
+                status: "autorizada",
+                numero: response.nfse?.infNfse?.nNFSe,
+                chave: response.chaveAcesso,
+                dataEmissao: new Date().toISOString(),
+                caminhoPdf: artefatos.pdfPath || artefatos.htmlPath || null,
+                caminhoXml: artefatos.xmlPath || null,
                 response,
             });
             logEvento("emissao_autorizada", empresa.id, conversaId, {
@@ -267,6 +297,14 @@ export async function emitirNFSe({
             response: result,
             erro: result.erros?.[0]?.mensagem,
         });
+        await atualizarNotaResultado(supabaseNotaId, {
+            status: focusStatus,
+            numero: result.numero,
+            chave: result.codigo_verificacao,
+            dataEmissao: focusStatus === "autorizada" ? new Date().toISOString() : undefined,
+            response: result,
+            erro: result.erros?.[0]?.mensagem,
+        });
         return {
             ok: focusStatus === "autorizada",
             notaId,
@@ -289,6 +327,15 @@ export async function emitirNFSe({
                 "UPDATE notas_emitidas SET payload_enviado = ? WHERE id = ?"
             ).run(JSON.stringify(dpsPayload).slice(0, 50_000), notaId);
         }
+        await atualizarNotaResultado(supabaseNotaId, {
+            status: "rejeitada",
+            erro: err.message,
+            response: {
+                error: err.message,
+                statusCode: err.statusCode,
+                sefazBody: sefazBody?.slice(0, 2000),
+            },
+        });
         persistirResultado({
             notaId,
             status: "rejeitada",

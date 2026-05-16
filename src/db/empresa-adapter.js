@@ -140,5 +140,8 @@ export function supabaseRowToEmpresa(row) {
 
         // Origem (debug)
         _source: "supabase",
+        // user_id do Supabase Auth — usado pra gravar notas em poupeja_nfse
+        // mantendo o RLS por usuário (cada cliente vê só as próprias notas).
+        _supabaseUserId: row.user_id,
     };
 }
