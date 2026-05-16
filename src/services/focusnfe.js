@@ -124,28 +124,11 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             codigo_tributario_municipio: codigoTributarioMunicipio,
             codigo_cnae: empresa.cnae || undefined,
             valor_servicos: servico.valor_total,
-            // Lei da Transparência — gera <totTrib> no XML padrão Nacional.
-            // Goiânia exige esse bloco, mesmo sendo Simples Nacional. Estimativa
-            // IBPT ~6% (faixa típica ME/EPP serviços).
-            percentual_total_tributos: optanteSimples ? 6.0 : 0,
-            fonte_total_tributos: "IBPT",
-            // Reforma Tributária — bloco IBS/CBS.
-            // Pra Simples Nacional: CST=200, cClassTrib=200052 (referência XML real).
-            // Alíquotas zeradas (tributos saem via DAS no Simples).
-            codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
-            ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
-            ibs_cbs_classificacao_tributaria: optanteSimples
-                ? "200052"
-                : undefined,
-            ibs_cbs_base_calculo: servico.valor_total,
-            ibs_uf_aliquota: 0,
-            ibs_mun_aliquota: 0,
-            cbs_aliquota: 0,
-            ibs_uf_valor: 0,
-            ibs_mun_valor: 0,
-            cbs_valor: 0,
         },
     };
+    // Nota: payload municipal mantido MÍNIMO. Pra municípios já migrados
+    // pra Reforma (Goiânia, Aparecida...), usar `padrao=nacional` que envia
+    // pra /v2/nfsen com todos os campos IBS/CBS via montarPayloadNacional.
 }
 
 function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
@@ -177,6 +160,9 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         inscricao_municipal_prestador: empresa.inscricao_municipal || undefined,
         razao_social_prestador: empresa.razao_social || undefined,
         codigo_opcao_simples_nacional: optanteSimples ? "3" : "1", // 3=ME/EPP, 1=Não optante
+        // regime_tributario_simples_nacional (regApTribSN):
+        // 1 = tributos federais E municipal pelo SN (default pra ME/EPP)
+        regime_tributario_simples_nacional: optanteSimples ? "1" : undefined,
         regime_especial_tributacao: "0", // Nenhum
         codigo_municipio_prestacao: Number(empresa.municipio_codigo),
         codigo_tributacao_nacional_iss: Number(codTribNacional),
@@ -185,10 +171,23 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         tributacao_iss: "1", // Operação tributável
         tipo_retencao_iss: "1", // Não Retido
         indicador_total_tributacao: "0",
-        // Reforma Tributária (LC 214/2025)
+        // Reforma Tributária (LC 214/2025) — campos OBRIGATÓRIOS
         finalidade_emissao: "0", // NFS-e regular
         consumidor_final: tomador.tipo === "PF" ? "1" : "0",
         indicador_destinatario: "0", // tomador = destinatário
+        // Bloco IBS/CBS — obrigatório no XSD pós-Reforma (mesmo Simples Nacional).
+        // Simples: CST=200, cClassTrib=200052 (referência XML real de empresa
+        // do nicho. Tributos saem via DAS, então alíquotas/valores zerados).
+        codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
+        ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
+        ibs_cbs_classificacao_tributaria: optanteSimples
+            ? "200052"
+            : undefined,
+        // Lei da Transparência — pTotTribSN específico do Simples (gera <totTrib>).
+        percentual_total_tributos_simples_nacional: optanteSimples
+            ? 6.0
+            : undefined,
+        codigo_nbs: empresa.codigo_nbs_padrao || undefined,
     };
 
     if (tomador.tipo === "PJ") {
