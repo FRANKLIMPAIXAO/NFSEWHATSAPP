@@ -139,7 +139,15 @@ export function supabaseRowToEmpresa(row) {
         // exige no <cTribMun>). Sem isso, fallback pro LC 116 6 dígitos
         // (provavelmente rejeitado pelo XSD municipal).
         codigo_atividade_municipal: row.codigo_atividade_municipal || undefined,
-        // usa_nfse_nacional: undefined → cai no env FOCUS_NFE_PADRAO
+        // Cenário C - Ambiente Nacional NFSe (LC 214/2025): true → endpoint
+        // /v2/nfsen + montarPayloadNacional. Goiânia, Aparecida e outros
+        // estão neste cenário em 2026 (formato + ambiente Nacional).
+        // Empresa precisa ter "Ambiente da NFSe Nacional" habilitado no
+        // painel Focus. Default undefined → cai no env FOCUS_NFE_PADRAO.
+        usa_nfse_nacional:
+            typeof row.usa_nfse_nacional === "boolean"
+                ? row.usa_nfse_nacional
+                : undefined,
 
         // WhatsApp
         whatsapp_dono: row.whatsapp_dono,

@@ -248,6 +248,16 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
 
     const dataEmissao = agoraBrtIso();
 
+    // codigo_tributacao_municipal_iss: 3 dígitos, padrão definido pelo município.
+    // HC cadastrada com "1701" no perfil municipal → truncamos pra 3 dig "170".
+    const codTribMunicipal = String(
+        servico.codigo_tributario_municipio ||
+            empresa.codigo_atividade_municipal ||
+            ""
+    )
+        .replace(/\D/g, "")
+        .slice(0, 3);
+
     const payload = {
         data_emissao: dataEmissao,
         serie_dps: 1,
@@ -256,36 +266,37 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         emitente_dps: "1", // Prestador
         codigo_municipio_emissora: Number(empresa.municipio_codigo),
         cnpj_prestador: empresa.cnpj,
-        inscricao_municipal_prestador: empresa.inscricao_municipal || undefined,
+        // IM só pode ser enviada se município integrado ao CNC NFS-e Nacional.
+        // Goiânia/Aparecida hoje (mai/2026) fora do CNC → omitir IM (E0120).
+        inscricao_municipal_prestador: empresa.municipio_no_cnc
+            ? empresa.inscricao_municipal || undefined
+            : undefined,
         razao_social_prestador: empresa.razao_social || undefined,
-        codigo_opcao_simples_nacional: optanteSimples ? "3" : "1", // 3=ME/EPP, 1=Não optante
-        // regime_tributario_simples_nacional (regApTribSN):
-        // 1 = tributos federais E municipal pelo SN (default pra ME/EPP)
+        codigo_opcao_simples_nacional: optanteSimples ? "3" : "1", // 3=ME/EPP, 1=Não Optante
+        // regime_tributario_simples_nacional: 1=federal+municipal via SN (default ME/EPP)
         regime_tributario_simples_nacional: optanteSimples ? "1" : undefined,
-        regime_especial_tributacao: "0", // Nenhum
+        regime_especial_tributacao: "0", // Nenhum (Simples Nacional NÃO é regime especial)
         codigo_municipio_prestacao: Number(empresa.municipio_codigo),
         codigo_tributacao_nacional_iss: Number(codTribNacional),
-        descricao_servico: servico.descricao,
+        codigo_tributacao_municipal_iss: codTribMunicipal || undefined,
+        descricao_servico: normalizarDiscriminacao(servico.descricao),
         valor_servico: Number(servico.valor_total),
-        tributacao_iss: "1", // Operação tributável
-        tipo_retencao_iss: "1", // Não Retido
-        indicador_total_tributacao: "0",
-        // Reforma Tributária (LC 214/2025) — campos OBRIGATÓRIOS
+        tributacao_iss: "1", // 1=Operação Tributável
+        tipo_retencao_iss: "1", // 1=Não Retido
+        // Reforma Tributária — campos OBRIGATÓRIOS pós-Reforma
         finalidade_emissao: "0", // NFS-e regular
         consumidor_final: tomador.tipo === "PF" ? "1" : "0",
         indicador_destinatario: "0", // tomador = destinatário
-        // Bloco IBS/CBS — obrigatório no XSD pós-Reforma (mesmo Simples Nacional).
-        // Simples: CST=200, cClassTrib=200052 (referência XML real de empresa
-        // do nicho. Tributos saem via DAS, então alíquotas/valores zerados).
         codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
+        // IBS/CBS — Simples: CST=200, cClassTrib=200052 (DAS paga à parte)
         ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
-        ibs_cbs_classificacao_tributaria: optanteSimples
-            ? "200052"
+        ibs_cbs_classificacao_tributaria: optanteSimples ? "200052" : undefined,
+        // Lei da Transparência (Lei 12.741) — Opção C (Simples Nacional):
+        // percentual_total_tributos_simples_nacional. Pra HC consultoria
+        // Anexo III, alíquota efetiva ~6% (inicio da faixa).
+        percentual_total_tributos_simples_nacional: optanteSimples
+            ? Number(empresa.aliquota_iss) || 6
             : undefined,
-        // Pra Simples Nacional, indicador_total_tributacao="0" (default) +
-        // optante_simples_nacional=true devem fazer Focus pular o <totTrib>
-        // ou gerar formato vazio. Campos pTotTribSN/percentual_total_tributos
-        // estavam gerando XML invalido (elemento em posicao errada).
         codigo_nbs: empresa.codigo_nbs_padrao || undefined,
     };
 
