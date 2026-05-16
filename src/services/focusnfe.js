@@ -87,13 +87,13 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // Item LC 116 — formato com ponto (ex: "17.01") é o que municípios ABRASF
-    // como Goiânia esperam. NÃO converter pra 6 dígitos aqui — Focus aceita
-    // o formato original e converte internamente se necessário.
-    const itemListaServico = String(servico.codigo_lc116 || "").trim();
-    // Código tributário municipal — Goiânia exige obrigatório, e a regra do
-    // município é "mesmo valor do item_lista_servico". Outros municípios podem
-    // sobrescrever via servico.codigo_tributario_municipio se cadastrado.
+    // Item LC 116 — Focus exige formato 6 dígitos numéricos:
+    // "17.01" → "170100" (2 item + 2 subitem + 2 desdobro nacional pós-Reforma).
+    // Doc oficial Focus mostra exemplo "1.01" mas Focus rejeita com mensagem
+    // explícita: "O código é composto por 6 dígitos numéricos".
+    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
+    // Código tributário municipal — Goiânia exige obrigatório, regra é
+    // "mesmo valor do item_lista_servico" (6 dígitos).
     const codigoTributarioMunicipio =
         servico.codigo_tributario_municipio || itemListaServico;
 
