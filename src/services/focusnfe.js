@@ -93,6 +93,9 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         optante_simples_nacional: optanteSimples,
         incentivador_cultural: false,
         regime_especial_tributacao: optanteSimples ? 6 : undefined,
+        // Reforma Tributária — finalidade vem ANTES dos campos IBS/CBS no XSD.
+        // 0 = NFS-e regular (default pra emissões normais).
+        finalidade_emissao: "0",
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -121,10 +124,20 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             outras_retencoes: 0,
             desconto_incondicionado: 0,
             desconto_condicionado: 0,
-            // Lei da Transparência (gera <totTrib> no XML padrão Nacional).
+            // Lei da Transparência — gera <totTrib> no XML padrão Nacional.
             // Pra Simples Nacional, estimativa IBPT ~6% (faixa típica ME/EPP serviços).
+            // Tentamos múltiplos nomes pra cobrir variações da API Focus por município.
             percentual_total_tributos: optanteSimples ? 6.0 : 0,
             fonte_total_tributos: "IBPT",
+            valor_total_tributos: optanteSimples
+                ? Number(servico.valor_total) * 0.06
+                : 0,
+            // Específico Simples Nacional (campo do XSD <pTotTribSN>)
+            ...(optanteSimples && {
+                aliquota_total_tributos_simples_nacional: 6.0,
+                percentual_total_tributos_simples_nacional: 6.0,
+                pTotTribSN: 6.0,
+            }),
             // Reforma Tributária — campos IBS/CBS (gera <gIBSCBS> no XML).
             // Pra Simples Nacional: CST=200, cClassTrib=200052 (referência XML
             // real de empresa do nicho). Alíquotas zeradas porque tributos
