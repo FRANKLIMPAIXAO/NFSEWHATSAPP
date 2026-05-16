@@ -11,7 +11,11 @@
 import { logger } from "../utils/logger.js";
 
 const ENV = process.env.FOCUS_NFE_ENV || "homologacao";
-const PADRAO_DEFAULT = process.env.FOCUS_NFE_PADRAO || "nacional";
+// Default MUNICIPAL (ABRASF/IssNet) — esmagadora maioria dos municípios em
+// 2026 ainda usa ISSNet próprio (Goiânia, Aparecida, etc). Só sobrescrever
+// pra "nacional" se o município confirmadamente está parametrizado pro EPN
+// da União (consultar nfse.gov.br). Empresa pode forçar via empresa.usa_nfse_nacional.
+const PADRAO_DEFAULT = process.env.FOCUS_NFE_PADRAO || "municipal";
 const BASE_URL =
     ENV === "producao"
         ? process.env.FOCUS_NFE_BASE_URL_PRODUCAO || "https://api.focusnfe.com.br"
@@ -29,10 +33,20 @@ function basePathPara(padrao) {
     return padrao === "nacional" ? "/v2/nfsen" : "/v2/nfse";
 }
 
-// "14.01" → "140100" | "1401" → "140100" | "14.01.00" → "140100"
+// NACIONAL (DPS): "14.01" → "140100" | "1401" → "140100" | "14.01.00" → "140100"
+// (cServTribNac do XSD Nacional exige 6 dígitos puros — Tabela CGSN)
 function codigoServico6Digitos(codigo) {
     const d = String(codigo || "").replace(/\D/g, "");
     return d.padEnd(6, "0").slice(0, 6);
+}
+
+// MUNICIPAL (ABRASF/IssNet — Goiânia, Aparecida, etc): "1401" → "14.01" |
+// "140100" → "14.01" | "14.01" → "14.01". Formato canônico LC 116 com ponto.
+// Doc Focus mostra `"item_lista_servico": "1.01"` (string).
+function codigoServicoLC116(codigo) {
+    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
+    if (d.length < 3) return d;
+    return d.slice(0, -2) + "." + d.slice(-2);
 }
 
 // Data/hora atual em horário de Brasília com TZD -03:00.
@@ -87,16 +101,17 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // Item LC 116 — Focus exige formato 6 dígitos numéricos pós-Reforma:
-    // "17.01" → "170100" (2 item + 2 subitem + 2 desdobro nacional).
-    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
-    // Código tributário MUNICIPAL — XSD do <cTribMun> em Goiânia/ABRASF exige
-    // 4 dígitos (formato curto sem desdobro nacional): "17.01" → "1701".
-    // Erro do Focus 422 quando enviado 6 dígitos: "valor '171900' não aceito
-    // pelo pattern [0-9]{3}". Empresa pode sobrescrever com cadastro próprio.
+    // ABRASF/IssNet (Goiânia, Aparecida): item LC 116 no formato canônico
+    // "X.XX" string (ex: "17.01"). Doc oficial Focus pra Goiânia mostra
+    // `"item_lista_servico": "1.01"`. NÃO usar 6 dígitos aqui — esse formato
+    // é exclusivo do DPS Nacional pós-Reforma (montarPayloadNacional).
+    const itemListaServico = codigoServicoLC116(servico.codigo_lc116);
+    // Código tributário MUNICIPAL — doc Focus mostra mesmo formato do item
+    // lista serviço ("X.XX"). Focus normaliza pro pattern [0-9]{3} no XML.
+    // Empresa pode sobrescrever com código municipal próprio se a prefeitura
+    // exigir codificação diferente da LC 116.
     const codigoTributarioMunicipio =
-        servico.codigo_tributario_municipio ||
-        String(servico.codigo_lc116 || "").replace(/\D/g, "").slice(0, 4);
+        servico.codigo_tributario_municipio || itemListaServico;
 
     return {
         data_emissao: agoraBrtIso(),
@@ -104,8 +119,6 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         optante_simples_nacional: optanteSimples,
         incentivador_cultural: false,
         regime_especial_tributacao: optanteSimples ? 6 : undefined,
-        // Reforma Tributária — finalidade vem ANTES de cIndOp no XSD <IBSCBS>.
-        finalidade_emissao: "0",
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -126,9 +139,11 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             valor_servicos: servico.valor_total,
         },
     };
-    // Nota: payload municipal mantido MÍNIMO. Pra municípios já migrados
-    // pra Reforma (Goiânia, Aparecida...), usar `padrao=nacional` que envia
-    // pra /v2/nfsen com todos os campos IBS/CBS via montarPayloadNacional.
+    // Nota: este é o payload pro provedor ABRASF/IssNet (consultar
+    // focusnfe.com.br/guides/nfse/municipios-integrados/<municipio>/ pra
+    // confirmar provedor). Goiânia, Aparecida, e maioria dos municípios
+    // ainda estão neste padrão. /v2/nfsen (Nacional) é só pra municípios
+    // que parametrizaram EPN da União — hoje quase ninguém em produção.
 }
 
 function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
