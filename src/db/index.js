@@ -53,6 +53,8 @@ ensureColumn("empresas", "municipio_no_cnc", "INTEGER NOT NULL DEFAULT 0");
 //   030101 = Inc. III, demais serviços, estab. fornecedor (consultoria comum)
 //   100301 = Inc. X, serviços à distância, domicílio do adquirente
 ensureColumn("empresas", "cind_op_padrao", "TEXT");
+ensureColumn("empresas", "codigo_tributacao_nacional", "TEXT");
+ensureColumn("empresas", "cnae", "TEXT");
 // UUID da empresa no Supabase (Pac no Bolso). Quando preenchido, a row é
 // "mirror" — serve só de âncora pras foreign keys (conversas, notas_emitidas,
 // eventos) que exigem empresa_id INTEGER. A fonte da verdade dos dados é o
@@ -127,9 +129,9 @@ const insertMirrorStmt = db.prepare(`
          regime, aliquota_iss, servico_padrao_lc116,
          municipio_codigo, municipio_nome, uf, inscricao_municipal, endereco_json,
          emissor, cert_pfx_path, cert_pfx_password, codigo_nbs_padrao,
-         cind_op_padrao, municipio_no_cnc,
+         cind_op_padrao, municipio_no_cnc, codigo_tributacao_nacional, cnae,
          supabase_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const updateMirrorStmt = db.prepare(`
     UPDATE empresas
@@ -138,6 +140,7 @@ const updateMirrorStmt = db.prepare(`
         municipio_codigo = ?, uf = ?, inscricao_municipal = ?, endereco_json = ?,
         emissor = ?, cert_pfx_path = ?, cert_pfx_password = ?,
         codigo_nbs_padrao = ?, cind_op_padrao = ?, municipio_no_cnc = ?,
+        codigo_tributacao_nacional = ?, cnae = ?,
         atualizada_em = datetime('now')
     WHERE id = ?
 `);
@@ -183,6 +186,8 @@ export function getOrCreateMirrorEmpresa(empresaSupa) {
             empresaSupa.codigo_nbs_padrao,
             empresaSupa.cind_op_padrao,
             empresaSupa.municipio_no_cnc ? 1 : 0,
+            empresaSupa.codigo_tributacao_nacional,
+            empresaSupa.cnae,
             existing.id
         );
         return existing.id;
@@ -207,6 +212,8 @@ export function getOrCreateMirrorEmpresa(empresaSupa) {
         empresaSupa.codigo_nbs_padrao,
         empresaSupa.cind_op_padrao,
         empresaSupa.municipio_no_cnc ? 1 : 0,
+        empresaSupa.codigo_tributacao_nacional,
+        empresaSupa.cnae,
         supabaseId
     );
     return result.lastInsertRowid;

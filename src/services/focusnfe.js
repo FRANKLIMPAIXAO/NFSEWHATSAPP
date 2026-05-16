@@ -87,15 +87,22 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
+    // Item LC 116 — formato com ponto (ex: "17.01") é o que municípios ABRASF
+    // como Goiânia esperam. NÃO converter pra 6 dígitos aqui — Focus aceita
+    // o formato original e converte internamente se necessário.
+    const itemListaServico = String(servico.codigo_lc116 || "").trim();
+    // Código tributário municipal — Goiânia exige obrigatório, e a regra do
+    // município é "mesmo valor do item_lista_servico". Outros municípios podem
+    // sobrescrever via servico.codigo_tributario_municipio se cadastrado.
+    const codigoTributarioMunicipio =
+        servico.codigo_tributario_municipio || itemListaServico;
+
     return {
         data_emissao: agoraBrtIso(),
         natureza_operacao: 1,
         optante_simples_nacional: optanteSimples,
         incentivador_cultural: false,
         regime_especial_tributacao: optanteSimples ? 6 : undefined,
-        // Reforma Tributária — finalidade vem ANTES dos campos IBS/CBS no XSD.
-        // 0 = NFS-e regular (default pra emissões normais).
-        finalidade_emissao: "0",
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -110,51 +117,11 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             aliquota: aliquotaServico,
             discriminacao: servico.descricao,
             iss_retido: false,
-            item_lista_servico: codigoServico6Digitos(servico.codigo_lc116),
-            codigo_tributario_municipio:
-                servico.codigo_tributario_municipio || undefined,
-            codigo_municipio: empresa.municipio_codigo,
+            item_lista_servico: itemListaServico,
+            codigo_tributario_municipio: codigoTributarioMunicipio,
+            // Goiânia exige CNAE obrigatoriamente (doc oficial Focus).
+            codigo_cnae: empresa.cnae || undefined,
             valor_servicos: servico.valor_total,
-            // Campos federais — zerados pro Simples Nacional (tributos saem via DAS).
-            valor_pis: 0,
-            valor_cofins: 0,
-            valor_inss: 0,
-            valor_ir: 0,
-            valor_csll: 0,
-            outras_retencoes: 0,
-            desconto_incondicionado: 0,
-            desconto_condicionado: 0,
-            // Lei da Transparência — gera <totTrib> no XML padrão Nacional.
-            // Pra Simples Nacional, estimativa IBPT ~6% (faixa típica ME/EPP serviços).
-            // Tentamos múltiplos nomes pra cobrir variações da API Focus por município.
-            percentual_total_tributos: optanteSimples ? 6.0 : 0,
-            fonte_total_tributos: "IBPT",
-            valor_total_tributos: optanteSimples
-                ? Number(servico.valor_total) * 0.06
-                : 0,
-            // Específico Simples Nacional (campo do XSD <pTotTribSN>)
-            ...(optanteSimples && {
-                aliquota_total_tributos_simples_nacional: 6.0,
-                percentual_total_tributos_simples_nacional: 6.0,
-                pTotTribSN: 6.0,
-            }),
-            // Reforma Tributária — campos IBS/CBS (gera <gIBSCBS> no XML).
-            // Pra Simples Nacional: CST=200, cClassTrib=200052 (referência XML
-            // real de empresa do nicho). Alíquotas zeradas porque tributos
-            // continuam via DAS no Simples.
-            codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
-            ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
-            ibs_cbs_classificacao_tributaria: optanteSimples
-                ? "200052"
-                : undefined,
-            ibs_cbs_base_calculo: servico.valor_total,
-            ibs_uf_aliquota: 0,
-            ibs_mun_aliquota: 0,
-            cbs_aliquota: 0,
-            ibs_uf_valor: 0,
-            ibs_mun_valor: 0,
-            cbs_valor: 0,
-            codigo_nbs: empresa.codigo_nbs_padrao || undefined,
         },
     };
 }

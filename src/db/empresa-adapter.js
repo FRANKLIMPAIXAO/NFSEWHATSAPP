@@ -134,6 +134,7 @@ export function supabaseRowToEmpresa(row) {
         // Focus
         focus_token,
         codigo_tributacao_nacional: row.codigo_servico_nacional,
+        cnae: row.cnae, // obrigatório pra Goiânia (e outros municípios ABRASF)
         // usa_nfse_nacional: undefined → cai no env FOCUS_NFE_PADRAO
 
         // WhatsApp
