@@ -8,8 +8,11 @@ FROM node:20-alpine AS builder
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
 COPY package*.json ./
-# Tem package-lock.json agora — usa npm ci (determinístico).
-# Inclui devDependencies também porque puppeteer baixa o Chromium no postinstall.
+# CRITICAL: pula download do Chromium pelo Puppeteer (transitive de nfse-nacional).
+# Sem isso o postinstall trava o build em Alpine. O Chromium do sistema é
+# instalado no stage runtime (apk add chromium).
+ENV PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 RUN npm ci --no-audit --no-fund --omit=dev
 
 
@@ -32,6 +35,10 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 
 # node_modules já compilados (incluindo better-sqlite3 nativo)
 COPY --from=builder /app/node_modules ./node_modules
+
+# Cache-bust: incrementar quando precisar forçar rebuild fresh no EasyPanel
+ARG CACHEBUST=2026-05-16-1
+RUN echo "cachebust=$CACHEBUST"
 
 # Código da aplicação (respeita .dockerignore)
 COPY . .

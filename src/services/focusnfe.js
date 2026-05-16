@@ -111,6 +111,24 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             codigo_tributario_municipio:
                 servico.codigo_tributario_municipio || undefined,
             valor_servicos: servico.valor_total,
+            // Campos federais — Focus exige preencher (mesmo zerados pra Simples
+            // Nacional) quando converte o payload municipal pro padrão Nacional
+            // pós-Reforma. Sem isso o XSD do <trib> rejeita por faltar tribFed
+            // ou totTrib. Pra Simples ME/EPP, ISS+demais tributos saem via DAS
+            // — valores zerados na nota refletem isso corretamente.
+            valor_pis: 0,
+            valor_cofins: 0,
+            valor_inss: 0,
+            valor_ir: 0,
+            valor_csll: 0,
+            aliquota_pis: 0,
+            aliquota_cofins: 0,
+            aliquota_inss: 0,
+            aliquota_ir: 0,
+            aliquota_csll: 0,
+            valor_outras_retencoes: 0,
+            descontos_condicionados: 0,
+            descontos_incondicionados: 0,
         },
     };
 }
