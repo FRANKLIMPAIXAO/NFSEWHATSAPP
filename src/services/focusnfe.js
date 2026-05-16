@@ -49,10 +49,13 @@ function codigoServico6Digitos(codigo) {
 // recebe "X.XX": "código composto por 6 dígitos numéricos". Reusa
 // codigoServico6Digitos definido acima.
 
-// cTribMun: empresa.codigo_atividade_municipal vem do cadastro municipal
-// (HC = "1701"). Fallback: primeiros 4 dígitos do código do serviço.
-function codigoTribMunFallback4Dig(codigo6Dig) {
-    return String(codigo6Dig || "").slice(0, 4);
+// cTribMun: XSD Nacional pós-Reforma (namespace sped.fazenda.gov.br/nfse)
+// exige EXATAMENTE 3 dígitos (pattern [0-9]{3}). Goiânia migrou pra esse
+// formato em prod 2026, mesmo emitindo via IssNet — Focus converte. XMLs
+// antigos (ABRASF 2.04) tinham 4 dig — não mais aceitos.
+// HC cadastrada com "1701" → enviamos "170" (Item LC 116 17 + dígito 0).
+function codigoTribMun3Digitos(codigo) {
+    return String(codigo || "").replace(/\D/g, "").slice(0, 3);
 }
 
 // Normaliza discriminacao pro charset aceito pelo ABRASF de Goiânia (XSD
@@ -130,12 +133,13 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     // já injeta no servico.codigo_lc116. Extractor LLM não é fonte confiável.
     const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
 
-    // cTribMun: empresa.codigo_atividade_municipal vem do cadastro municipal
-    // (HC = "1701"). XML final Goiânia tem 4 dig sem ponto.
-    const codigoTributarioMunicipio =
+    // cTribMun: 3 dígitos exatos (XSD Nacional pós-Reforma pattern [0-9]{3}).
+    // Trunca o que vier (cadastro municipal "1701" → "170").
+    const codigoTributarioMunicipio = codigoTribMun3Digitos(
         servico.codigo_tributario_municipio ||
-        empresa.codigo_atividade_municipal ||
-        codigoTribMunFallback4Dig(itemListaServico);
+            empresa.codigo_atividade_municipal ||
+            itemListaServico
+    );
 
     const numeroRps = Math.floor(Date.now() / 1000);
 
