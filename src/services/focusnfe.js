@@ -192,6 +192,10 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             // Roca #11=3314799, Centro Oeste #96=5212500). Vem do cadastro.
             codigo_cnae: empresa.cnae || undefined,
             codigo_municipio: empresa.municipio_codigo,
+            // Lei da Transparência (Lei 12.741) — XSD Nacional pós-Reforma
+            // exige <trib> com <tribFed> ou <totTrib> child. Valor 0.00 é
+            // aceito pra Simples Nacional (DAS pago à parte; informativo).
+            valor_total_tributos: 0,
         },
         numero: numeroRps,
         serie: "1",
