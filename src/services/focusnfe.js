@@ -188,21 +188,18 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             discriminacao: normalizarDiscriminacao(servico.descricao),
             item_lista_servico: itemListaServico,
             codigo_tributario_municipio: codigoTributarioMunicipio,
-            // CodigoCnae visto em todos os XMLs reais Goiânia (HC #15=8211300,
-            // Roca #11=3314799, Centro Oeste #96=5212500). Vem do cadastro.
             codigo_cnae: empresa.cnae || undefined,
             codigo_municipio: empresa.municipio_codigo,
-            // XSD Nacional pós-Reforma exige <trib> com <tribFed> ou <totTrib>.
-            // Estratégia: enviar tributos federais zerados (Simples paga via
-            // DAS, valores 0 são informativos) pra Focus gerar <tribFed>.
-            // Complementa com percentual_total_tributos pro <totTrib>.
-            valor_pis: 0,
-            valor_cofins: 0,
-            valor_inss: 0,
-            valor_ir: 0,
-            valor_csll: 0,
             percentual_total_tributos: aliquotaServico || 6,
             fonte_total_tributos: "IBPT",
+            // Reforma Tributária — campos (RT) da doc Focus. Goiânia pós-Reforma
+            // pode estar exigindo esses pra ativar geração completa do <trib>.
+            // codigo_indicador_operacao: usa cadastro empresa ou default 030101.
+            codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
+            // IBS/CBS pra Simples: CST=200, cClassTrib=200052 (valores zerados,
+            // tributos via DAS). Pra regime normal, deixar undefined.
+            ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
+            ibs_cbs_classificacao_tributaria: optanteSimples ? "200052" : undefined,
         },
         numero: numeroRps,
         serie: "1",
