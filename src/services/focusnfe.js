@@ -192,11 +192,15 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             // Roca #11=3314799, Centro Oeste #96=5212500). Vem do cadastro.
             codigo_cnae: empresa.cnae || undefined,
             codigo_municipio: empresa.municipio_codigo,
-            // Lei da Transparência (Lei 12.741) — XSD Nacional pós-Reforma
-            // exige <trib> com <tribFed> ou <totTrib>. Focus só gera totTrib
-            // se percentual_total_tributos > 0 (valor 0 é tratado como vazio).
-            // Pra Simples Nacional, usa alíquota DAS aprox do Anexo III
-            // (consultoria começa em ~6% no anexo) — IBPT publica tabelas.
+            // XSD Nacional pós-Reforma exige <trib> com <tribFed> ou <totTrib>.
+            // Estratégia: enviar tributos federais zerados (Simples paga via
+            // DAS, valores 0 são informativos) pra Focus gerar <tribFed>.
+            // Complementa com percentual_total_tributos pro <totTrib>.
+            valor_pis: 0,
+            valor_cofins: 0,
+            valor_inss: 0,
+            valor_ir: 0,
+            valor_csll: 0,
             percentual_total_tributos: aliquotaServico || 6,
             fonte_total_tributos: "IBPT",
         },
