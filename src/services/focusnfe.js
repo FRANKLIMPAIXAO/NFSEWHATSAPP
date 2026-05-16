@@ -33,20 +33,23 @@ function basePathPara(padrao) {
     return padrao === "nacional" ? "/v2/nfsen" : "/v2/nfse";
 }
 
-// NACIONAL (DPS): "14.01" → "140100" | "1401" → "140100" | "14.01.00" → "140100"
-// (cServTribNac do XSD Nacional exige 6 dígitos puros — Tabela CGSN)
+// Item Lista Serviço — 6 dígitos: 2 Item LC 116 + 2 Subitem LC 116 + 2 Desdobro
+// Nacional. Tanto Focus Nacional (cServTribNac) quanto Focus Municipal pós-Reforma
+// (IssNet Goiânia, etc) exigem este formato. Doc Focus genérica mostra "X.XX"
+// mas em produção Goiânia rejeita com 422 e pede 6 dígitos.
+// "14.01" → "140100" | "1401" → "140100" | "171901" → "171901"
 function codigoServico6Digitos(codigo) {
     const d = String(codigo || "").replace(/\D/g, "");
     return d.padEnd(6, "0").slice(0, 6);
 }
 
-// MUNICIPAL (ABRASF/IssNet — Goiânia, Aparecida, etc): "1401" → "14.01" |
-// "140100" → "14.01" | "14.01" → "14.01". Formato canônico LC 116 com ponto.
-// Doc Focus mostra `"item_lista_servico": "1.01"` (string).
-function codigoServicoLC116(codigo) {
-    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
-    if (d.length < 3) return d;
-    return d.slice(0, -2) + "." + d.slice(-2);
+// Código Tributário Municipal (cTribMun) — XSD do IssNet Goiânia exige pattern
+// [0-9]{3} (exatamente 3 dígitos). Pega Item+Subitem LC 116 sem desdobro:
+// "171901" → "171" | "17.19" → "171" | "1.01" → "101".
+// Empresa pode sobrescrever com código próprio cadastrado na prefeitura.
+function codigoTribMun3Digitos(codigo) {
+    const d = String(codigo || "").replace(/\D/g, "");
+    return d.padEnd(3, "0").slice(0, 3);
 }
 
 // Data/hora atual em horário de Brasília com TZD -03:00.
@@ -101,17 +104,14 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // ABRASF/IssNet (Goiânia, Aparecida): item LC 116 no formato canônico
-    // "X.XX" string (ex: "17.01"). Doc oficial Focus pra Goiânia mostra
-    // `"item_lista_servico": "1.01"`. NÃO usar 6 dígitos aqui — esse formato
-    // é exclusivo do DPS Nacional pós-Reforma (montarPayloadNacional).
-    const itemListaServico = codigoServicoLC116(servico.codigo_lc116);
-    // Código tributário MUNICIPAL — doc Focus mostra mesmo formato do item
-    // lista serviço ("X.XX"). Focus normaliza pro pattern [0-9]{3} no XML.
-    // Empresa pode sobrescrever com código municipal próprio se a prefeitura
-    // exigir codificação diferente da LC 116.
+    // IssNet Goiânia em produção rejeita formato "X.XX" com 422 ("código é
+    // composto por 6 dígitos numéricos"). Padrão CGSN aplicado mesmo no ABRASF.
+    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
+    // cTribMun em 3 dígitos (Item+Subitem LC 116 sem desdobro). XSD do IssNet
+    // Goiânia tem pattern [0-9]{3}. Sobrescrevível por servico.codigo_tributario_municipio.
     const codigoTributarioMunicipio =
-        servico.codigo_tributario_municipio || itemListaServico;
+        servico.codigo_tributario_municipio ||
+        codigoTribMun3Digitos(servico.codigo_lc116);
 
     return {
         data_emissao: agoraBrtIso(),
