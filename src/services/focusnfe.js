@@ -33,23 +33,27 @@ function basePathPara(padrao) {
     return padrao === "nacional" ? "/v2/nfsen" : "/v2/nfse";
 }
 
-// Item Lista Serviço — 6 dígitos: 2 Item LC 116 + 2 Subitem LC 116 + 2 Desdobro
-// Nacional. Tanto Focus Nacional (cServTribNac) quanto Focus Municipal pós-Reforma
-// (IssNet Goiânia, etc) exigem este formato. Doc Focus genérica mostra "X.XX"
-// mas em produção Goiânia rejeita com 422 e pede 6 dígitos.
+// Código do serviço NACIONAL (DPS) — 6 dígitos: 2 Item + 2 Subitem + 2 Desdobro
+// Nacional. cServTribNac do XSD Nacional exige 6 dígitos puros (Tabela CGSN).
 // "14.01" → "140100" | "1401" → "140100" | "171901" → "171901"
 function codigoServico6Digitos(codigo) {
     const d = String(codigo || "").replace(/\D/g, "");
     return d.padEnd(6, "0").slice(0, 6);
 }
 
-// Código Tributário Municipal (cTribMun) — XSD do IssNet Goiânia exige pattern
-// [0-9]{3} (exatamente 3 dígitos). Pega Item+Subitem LC 116 sem desdobro:
-// "171901" → "171" | "17.19" → "171" | "1.01" → "101".
-// Empresa pode sobrescrever com código próprio cadastrado na prefeitura.
-function codigoTribMun3Digitos(codigo) {
-    const d = String(codigo || "").replace(/\D/g, "");
-    return d.padEnd(3, "0").slice(0, 3);
+// MUNICIPAL (IssNet/ABRASF — Goiânia, etc): formato canônico LC 116 "X.XX"
+// (string com ponto). Validado com payload Base44 funcional em prod HC GESTAO.
+// "171901" → "17.19" | "1719" → "17.19" | "17.19" → "17.19" | "1.01" → "1.01"
+function itemListaServicoLC116(codigo) {
+    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
+    if (d.length < 3) return d;
+    return d.slice(0, -2) + "." + d.slice(-2);
+}
+
+// cTribMun no formato Base44: item_lista_servico sem o ponto.
+// "17.19" → "1719" | "1.01" → "101". Goiânia IssNet aceita 3 ou 4 dígitos.
+function codigoTribMunSemPonto(itemListaServico) {
+    return String(itemListaServico || "").replace(/[.\-]/g, "");
 }
 
 // Data/hora atual em horário de Brasília com TZD -03:00.
@@ -94,31 +98,36 @@ async function focusFetch(method, path, token, body) {
 
 function montarPayloadMunicipal({ referencia, empresa, tomador, servico, competencia }) {
     let inscricaoMunicipal = empresa.inscricao_municipal || null;
-    if (!inscricaoMunicipal && empresa.endereco_json) {
+    let enderecoEmpresa = {};
+    if (empresa.endereco_json) {
         try {
-            const e = JSON.parse(empresa.endereco_json);
-            if (e.inscricao_municipal) inscricaoMunicipal = e.inscricao_municipal;
+            enderecoEmpresa = JSON.parse(empresa.endereco_json) || {};
+            if (!inscricaoMunicipal && enderecoEmpresa.inscricao_municipal) {
+                inscricaoMunicipal = enderecoEmpresa.inscricao_municipal;
+            }
         } catch {}
     }
 
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // IssNet Goiânia em produção rejeita formato "X.XX" com 422 ("código é
-    // composto por 6 dígitos numéricos"). Padrão CGSN aplicado mesmo no ABRASF.
-    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
-    // cTribMun em 3 dígitos (Item+Subitem LC 116 sem desdobro). XSD do IssNet
-    // Goiânia tem pattern [0-9]{3}. Sobrescrevível por servico.codigo_tributario_municipio.
+    // Formato canônico LC 116: "X.XX" string (ex: "17.19"). Validado com
+    // payload Base44 funcional em prod HC GESTAO. Goiânia IssNet aceita.
+    const itemListaServico = itemListaServicoLC116(servico.codigo_lc116);
+    // cTribMun: item_lista_servico sem ponto. Override possível via servico.
     const codigoTributarioMunicipio =
         servico.codigo_tributario_municipio ||
-        codigoTribMun3Digitos(servico.codigo_lc116);
+        codigoTribMunSemPonto(itemListaServico);
 
-    return {
+    // Número RPS único — timestamp em segundos. Pra controle sequencial
+    // próprio precisaria coluna numero_rps_atual na empresa (Base44 faz isso).
+    const numeroRps = Math.floor(Date.now() / 1000);
+
+    const tomadorEndereco = tomador.endereco || {};
+    const payload = {
         data_emissao: agoraBrtIso(),
-        natureza_operacao: 1,
         optante_simples_nacional: optanteSimples,
         incentivador_cultural: false,
-        regime_especial_tributacao: optanteSimples ? 6 : undefined,
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -128,22 +137,43 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             cnpj: tomador.tipo === "PJ" ? tomador.documento : undefined,
             cpf: tomador.tipo === "PF" ? tomador.documento : undefined,
             razao_social: tomador.razao_social,
+            email: tomador.email || undefined,
+            endereco: {
+                logradouro: tomadorEndereco.logradouro || "Nao informado",
+                numero: tomadorEndereco.numero || "SN",
+                complemento: tomadorEndereco.complemento || undefined,
+                bairro: tomadorEndereco.bairro || "Centro",
+                codigo_municipio:
+                    tomadorEndereco.codigo_municipio ||
+                    tomadorEndereco.ibge ||
+                    empresa.municipio_codigo,
+                uf: tomadorEndereco.uf || empresa.uf || "GO",
+                cep: (tomadorEndereco.cep || "").replace(/\D/g, "") || undefined,
+            },
         },
         servico: {
+            valor_servicos: servico.valor_total,
+            iss_retido: false,
             aliquota: aliquotaServico,
             discriminacao: servico.descricao,
-            iss_retido: false,
             item_lista_servico: itemListaServico,
             codigo_tributario_municipio: codigoTributarioMunicipio,
             codigo_cnae: empresa.cnae || undefined,
-            valor_servicos: servico.valor_total,
+            codigo_municipio: empresa.municipio_codigo,
         },
+        numero: numeroRps,
+        serie: "1",
     };
-    // Nota: este é o payload pro provedor ABRASF/IssNet (consultar
-    // focusnfe.com.br/guides/nfse/municipios-integrados/<municipio>/ pra
-    // confirmar provedor). Goiânia, Aparecida, e maioria dos municípios
-    // ainda estão neste padrão. /v2/nfsen (Nacional) é só pra municípios
-    // que parametrizaram EPN da União — hoje quase ninguém em produção.
+
+    // Pra Simples Nacional NÃO enviar natureza_operacao (campo
+    // optante_simples_nacional já define o regime). Enviar quebra
+    // validação XSD pós-Reforma exigindo <trib><tribFed> ou <totTrib>.
+    // Convenção descoberta no payload Base44 funcional em prod HC GESTAO.
+    if (!optanteSimples) {
+        payload.natureza_operacao = 1;
+    }
+
+    return payload;
 }
 
 function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
