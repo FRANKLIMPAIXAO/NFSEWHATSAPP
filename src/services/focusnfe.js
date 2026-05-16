@@ -155,6 +155,13 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         // incentivador_cultural false → <IncentivoFiscal>2</IncentivoFiscal> (Não).
         // Visto em todos os XMLs reais Goiânia.
         incentivador_cultural: false,
+        // regime_especial_tributacao 6 = Microempresa Municipal (cobre Simples).
+        // Doc Focus pra Goiânia inclui esse campo. Sem ele, Focus mandava
+        // opSimpNac=2 (Não optante) no DPS pós-Reforma → SEFAZ E0160.
+        regime_especial_tributacao: optanteSimples ? 6 : undefined,
+        // codigo_opcao_simples_nacional: "3" = ME/EPP. Reforço pro XSD Nacional
+        // pós-Reforma mapear opSimpNac corretamente (3=optante ME/EPP).
+        codigo_opcao_simples_nacional: optanteSimples ? "3" : "1",
         prestador: {
             cnpj: empresa.cnpj,
             // IM só pode ser enviada se município está integrado ao CNC NFS-e
