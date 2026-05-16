@@ -41,9 +41,26 @@ function codigoServico6Digitos(codigo) {
     return d.padEnd(6, "0").slice(0, 6);
 }
 
-// MUNICIPAL: Focus valida item_lista_servico em 6 dígitos numéricos puros
-// ("código composto por 6 dígitos: 2 Item + 2 Subitem + 2 Desdobro Nacional"),
-// independente do que o XSD do município diga. Reusa codigoServico6Digitos.
+// MUNICIPAL (IssNet/ABRASF Goiânia): formato canônico LC 116 "X.XX" string
+// com ponto. Validado em XMLs reais de NFSe Goiânia (HC #15, Roca #11,
+// Centro Oeste #96 — todos com <ItemListaServico>17.01</ItemListaServico>
+// ou similar). NÃO usar 6 dígitos aqui — Focus pre-validation pediu 6 dig
+// na sessão anterior mas era por outro motivo (extractor mandando código
+// incorreto). Cadastro da empresa fornece o código certo.
+// "170100" → "17.01" | "1701" → "17.01" | "17.01" → "17.01"
+function itemListaServicoLC116(codigo) {
+    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
+    if (d.length < 3) return d;
+    return d.slice(0, -2) + "." + d.slice(-2);
+}
+
+// cTribMun em Goiânia: 4 dígitos sem ponto. Validado em XMLs reais:
+// <CodigoTributacaoMunicipio>1701</CodigoTributacaoMunicipio> pra HC.
+// Empresa cadastra via codigo_atividade_municipal no Pac (atividade econômica
+// real do cadastro municipal). Fallback: item_lista_servico sem ponto.
+function codigoTribMunGoiania(itemListaServico) {
+    return String(itemListaServico || "").replace(/[.\-]/g, "");
+}
 
 // Normaliza discriminacao pro charset aceito pelo ABRASF de Goiânia (XSD
 // nfse_gyn_v02.xsd): "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&$%()/+-.,;:=* ".
@@ -115,20 +132,21 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // Focus valida item_lista_servico em 6 dígitos (independente de XSD do
-    // município). Goiânia internamente ignora — mas pra Focus passar pre-validação.
-    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
+    // ItemListaServico formato "X.XX" string (validado em XMLs reais Goiânia).
+    // Fonte: empresa.servico_padrao_lc116 (cadastrado no Pac) — emissor.js
+    // já injeta no servico.codigo_lc116. Extractor LLM não é fonte confiável.
+    const itemListaServico = itemListaServicoLC116(servico.codigo_lc116);
 
-    // cTribMun em Goiânia = código de Atividade Econômica de 9 dígitos
-    // cadastrado no perfil do prestador na prefeitura (NÃO é LC 116).
+    // cTribMun: 4 dígitos sem ponto (validado em XMLs reais Goiânia "1701").
     // Ordem de precedência:
     //   1. servico.codigo_tributario_municipio (override por nota)
-    //   2. empresa.codigo_atividade_municipal (cadastrado no Pac)
-    //   3. fallback: 6 dígitos LC 116 (provavelmente Goiânia rejeita)
+    //   2. empresa.codigo_atividade_municipal (cadastrado no Pac, valor real)
+    //   3. fallback: item_lista_servico sem ponto (LC 116, pode não bater
+    //      com cadastro municipal mas Focus pode normalizar)
     const codigoTributarioMunicipio =
         servico.codigo_tributario_municipio ||
         empresa.codigo_atividade_municipal ||
-        itemListaServico;
+        codigoTribMunGoiania(itemListaServico);
 
     const numeroRps = Math.floor(Date.now() / 1000);
 
@@ -139,9 +157,11 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
 
     const payload = {
         data_emissao: agoraBrtIso(),
-        // optante_simples_nacional: doc Goiânia diz não enviar, mas Focus usa
-        // pra normalizar alíquota/ISS. Mantemos.
+        // optante_simples_nacional: XMLs reais Goiânia têm <OptanteSimplesNacional>1</...>
         optante_simples_nacional: optanteSimples,
+        // incentivador_cultural false → <IncentivoFiscal>2</IncentivoFiscal> (Não).
+        // Visto em todos os XMLs reais Goiânia.
+        incentivador_cultural: false,
         prestador: {
             cnpj: empresa.cnpj,
             inscricao_municipal: inscricaoMunicipal || undefined,
@@ -155,15 +175,16 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         },
         servico: {
             valor_servicos: servico.valor_total,
-            // iss_retido obrigatório pra Focus mapear pro <tribMun><tpRetISSQN>
-            // do XSD pós-Reforma (sem ele Focus gera <tribMun> vazio e o
-            // validador acusa missing child: cPaisResult, tpImunidade,
-            // exigSusp, BM, tpRetISSQN).
+            // iss_retido false → <IssRetido>2</IssRetido> (Não retido).
+            // Também resolve XSD pós-Reforma exigindo <tribMun><tpRetISSQN>.
             iss_retido: false,
             aliquota: aliquotaServico,
             discriminacao: normalizarDiscriminacao(servico.descricao),
             item_lista_servico: itemListaServico,
             codigo_tributario_municipio: codigoTributarioMunicipio,
+            // CodigoCnae visto em todos os XMLs reais Goiânia (HC #15=8211300,
+            // Roca #11=3314799, Centro Oeste #96=5212500). Vem do cadastro.
+            codigo_cnae: empresa.cnae || undefined,
             codigo_municipio: empresa.municipio_codigo,
         },
         numero: numeroRps,

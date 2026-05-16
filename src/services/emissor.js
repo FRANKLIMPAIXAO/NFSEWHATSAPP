@@ -276,11 +276,20 @@ export async function emitirNFSe({
         }
 
         // Default: Focus NFe
+        // Extractor LLM chuta codigo_lc116 baseado na descrição da mensagem,
+        // mas o código fiscal correto é o cadastrado pra empresa (provoca
+        // erro do tipo "cTribMun valor X não bate" quando o LLM erra item).
+        // Fonte de verdade: empresa.servico_padrao_lc116 (do Pac/Supabase).
+        const servicoFocus = {
+            ...servico,
+            codigo_lc116:
+                empresa.servico_padrao_lc116 || servico.codigo_lc116,
+        };
         const { result } = await emitirFocus({
             referencia,
             empresa,
             tomador,
-            servico,
+            servico: servicoFocus,
             competencia,
         });
         const focusStatus =
