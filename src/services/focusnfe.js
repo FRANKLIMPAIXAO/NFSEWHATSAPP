@@ -183,10 +183,10 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         ibs_cbs_classificacao_tributaria: optanteSimples
             ? "200052"
             : undefined,
-        // Lei da Transparência — pTotTribSN específico do Simples (gera <totTrib>).
-        percentual_total_tributos_simples_nacional: optanteSimples
-            ? 6.0
-            : undefined,
+        // Pra Simples Nacional, indicador_total_tributacao="0" (default) +
+        // optante_simples_nacional=true devem fazer Focus pular o <totTrib>
+        // ou gerar formato vazio. Campos pTotTribSN/percentual_total_tributos
+        // estavam gerando XML invalido (elemento em posicao errada).
         codigo_nbs: empresa.codigo_nbs_padrao || undefined,
     };
 
