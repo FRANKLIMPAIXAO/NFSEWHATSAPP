@@ -462,6 +462,16 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
                     `✅ Nota emitida!\nNúmero: ${numero_nfse}\nValor: R$ ${valorFmt}\nChave: ${result.chaveAcesso || "—"}`
                 );
             }
+            finalizarConversa.run("finalizada", conversa.id);
+        } else if (result.status === "pendente") {
+            // Emissão assíncrona — Focus aceitou, SEFAZ ainda vai processar.
+            // O webhook /webhooks/focus vai entregar o PDF ao cliente quando
+            // a SEFAZ retornar autorização (ver focus-webhook.js).
+            await enviarTexto(
+                numero,
+                `📋 Sua nota está sendo processada pela prefeitura. Te aviso aqui mesmo assim que for autorizada (alguns minutos).`
+            );
+            finalizarConversa.run("aguardando_sefaz", conversa.id);
         } else {
             const erroMsg = result.erro || `Status: ${result.status}`;
             await enviarTexto(
@@ -474,8 +484,8 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
                     `Nota ${result.referencia} rejeitada (${empresa.razao_social}): ${erroMsg}`
                 );
             }
+            finalizarConversa.run("finalizada", conversa.id);
         }
-        finalizarConversa.run("finalizada", conversa.id);
     } catch (err) {
         logger.error({ err: err.message }, "erro na emissão (roteador)");
         await enviarTexto(

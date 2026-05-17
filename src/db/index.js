@@ -274,6 +274,10 @@ export const updateNotaStatus = db.prepare(`
     WHERE id = ?
 `);
 
+export const findNotaByReferencia = db.prepare(`
+    SELECT * FROM notas_emitidas WHERE referencia = ?
+`);
+
 // =============================================================
 // DEDUPLICAÇÃO DE WEBHOOK
 // =============================================================
