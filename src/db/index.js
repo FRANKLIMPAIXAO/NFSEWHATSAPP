@@ -272,7 +272,7 @@ export const updateNotaStatus = db.prepare(`
     UPDATE notas_emitidas
     SET status = ?, numero_nfse = ?, codigo_verificacao = ?,
         url_pdf = ?, url_xml = ?, erro_mensagem = ?,
-        response_focus = ?, autorizada_em = CASE WHEN ? = 'autorizada' THEN datetime('now') ELSE autorizada_em END
+        response_focus = ?, autorizada_em = CASE WHEN ? = 'autorizado' THEN datetime('now') ELSE autorizada_em END
     WHERE id = ?
 `);
 

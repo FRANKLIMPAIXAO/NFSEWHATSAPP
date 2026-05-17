@@ -14,8 +14,8 @@
  * Fluxo:
  *   1. Busca a nota local pela `ref`
  *   2. Idempotência: ignora se nota já está em estado final
- *   3. Se autorizada → baixa PDF da Focus, envia pro cliente, persiste
- *   4. Se rejeitada/cancelada → mensagem ao cliente + avisa admin
+ *   3. Se autorizado → baixa PDF da Focus, envia pro cliente, persiste
+ *   4. Se rejeitado/cancelado → mensagem ao cliente + avisa admin
  */
 import { findNotaByReferencia, updateNotaStatus, findConversaById, findEmpresaById, finalizarConversa } from "../db/index.js";
 import { atualizarNotaResultado } from "../db/supabase-nota-repo.js";
@@ -25,11 +25,13 @@ import { logger } from "../utils/logger.js";
 
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP;
 
+// Status canônico (masculino) — alinha com check constraint do Supabase
+// (poupeja_nfse_status_check) e formato nativo da Focus.
 function statusFromPayload(body) {
     const raw = String(body.status || body.evento || "").toLowerCase();
-    if (raw === "autorizado" || raw === "autorizada") return "autorizada";
-    if (raw.startsWith("erro") || raw === "rejeitada") return "rejeitada";
-    if (raw === "cancelado" || raw === "cancelada") return "cancelada";
+    if (raw === "autorizado" || raw === "autorizada") return "autorizado";
+    if (raw.startsWith("erro") || raw === "rejeitado" || raw === "rejeitada") return "rejeitado";
+    if (raw === "cancelado" || raw === "cancelada") return "cancelado";
     if (raw === "processando_autorizacao" || raw === "pendente") return "pendente";
     return raw || "desconhecido";
 }
@@ -52,7 +54,7 @@ export async function handleFocusWebhook(body) {
         return { ok: false, reason: "nota_nao_encontrada" };
     }
 
-    if (nota.status === "autorizada" || nota.status === "rejeitada" || nota.status === "cancelada") {
+    if (nota.status === "autorizado" || nota.status === "rejeitado" || nota.status === "cancelado") {
         logger.info(
             { referencia, statusAtual: nota.status },
             "focus-webhook: nota já em estado final, ignorando (idempotente)"
@@ -73,23 +75,23 @@ export async function handleFocusWebhook(body) {
         return { ok: false, reason: "empresa_nao_encontrada" };
     }
 
-    if (novoStatus === "autorizada") {
+    if (novoStatus === "autorizado") {
         const numero = body.numero || nota.numero_nfse || "—";
         const codVerif = body.codigo_verificacao || nota.codigo_verificacao || null;
 
         updateNotaStatus.run(
-            "autorizada",
+            "autorizado",
             numero,
             codVerif,
             body.url || null,
             null,
             null,
             JSON.stringify(body).slice(0, 50_000),
-            "autorizada",
+            "autorizado",
             nota.id
         );
         await atualizarNotaResultado({ ref: referencia }, {
-            status: "autorizada",
+            status: "autorizado",
             numero,
             chave: codVerif,
             dataEmissao: new Date().toISOString(),
@@ -126,10 +128,10 @@ export async function handleFocusWebhook(body) {
             }
             finalizarConversa.run("finalizada", conversa.id);
         }
-        return { ok: true, status: "autorizada", numero };
+        return { ok: true, status: "autorizado", numero };
     }
 
-    if (novoStatus === "rejeitada" || novoStatus === "cancelada") {
+    if (novoStatus === "rejeitado" || novoStatus === "cancelado") {
         const motivo = body.mensagem || body.erros?.[0]?.mensagem || body.evento || "Sem detalhes";
         updateNotaStatus.run(
             novoStatus,
@@ -151,7 +153,7 @@ export async function handleFocusWebhook(body) {
         if (conversa?.whatsapp) {
             await enviarTexto(
                 conversa.whatsapp,
-                `❌ A SEFAZ ${novoStatus === "cancelada" ? "cancelou" : "rejeitou"} a emissão: ${motivo}\n\nVou avisar a equipe pra investigar.`
+                `❌ A SEFAZ ${novoStatus === "cancelado" ? "cancelou" : "rejeitou"} a emissão: ${motivo}\n\nVou avisar a equipe pra investigar.`
             );
             finalizarConversa.run("finalizada", conversa.id);
         }

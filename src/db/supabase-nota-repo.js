@@ -94,7 +94,7 @@ export async function inserirNotaPendente({
 }
 
 /**
- * Atualiza row de poupeja_nfse com resultado final (autorizada ou rejeitada).
+ * Atualiza row de poupeja_nfse com resultado final (autorizado/rejeitado/cancelado).
  *
  * Aceita identificação por UUID OU por ref (string `<empresaId>-<ts>-<rnd>`).
  * A ref é a chave natural — gerada pelo emissor.js, sempre disponível no
@@ -104,7 +104,7 @@ export async function inserirNotaPendente({
  * @param {string} [ident.supabaseNotaId] - UUID retornado por inserirNotaPendente
  * @param {string} [ident.ref] - referência gerada pelo emissor (preferido em webhook async)
  * @param {object} params
- * @param {string} params.status - 'autorizada' | 'rejeitada' | 'cancelada'
+ * @param {string} params.status - 'autorizado' | 'rejeitado' | 'cancelado'
  * @param {string} [params.numero]
  * @param {string} [params.chave]
  * @param {string} [params.dataEmissao] - ISO string

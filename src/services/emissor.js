@@ -109,7 +109,7 @@ export async function emitirNFSe({
             notaId: null,
             referencia,
             emissor,
-            status: "rejeitada",
+            status: "rejeitado",
             erro: `Data de competência (${competencia}) com formato inválido. Esperado YYYY-MM-DD.`,
         };
     }
@@ -119,7 +119,7 @@ export async function emitirNFSe({
             notaId: null,
             referencia,
             emissor,
-            status: "rejeitada",
+            status: "rejeitado",
             erro: `Data de competência (${competencia}) não pode ser posterior à data de hoje (${hojeIso}). Confirma a data correta do serviço?`,
         };
     }
@@ -211,12 +211,12 @@ export async function emitirNFSe({
                     JSON.stringify(response).slice(0, 500);
                 persistirResultado({
                     notaId,
-                    status: "rejeitada",
+                    status: "rejeitado",
                     erro: erroMsg,
                     response,
                 });
                 await atualizarNotaResultado(supabaseNotaId, {
-                    status: "rejeitada",
+                    status: "rejeitado",
                     erro: erroMsg,
                     response,
                 });
@@ -229,7 +229,7 @@ export async function emitirNFSe({
                     notaId,
                     referencia,
                     emissor,
-                    status: "rejeitada",
+                    status: "rejeitado",
                     erro: erroMsg,
                     response,
                 };
@@ -240,7 +240,7 @@ export async function emitirNFSe({
 
             persistirResultado({
                 notaId,
-                status: "autorizada",
+                status: "autorizado",
                 numero: response.nfse?.infNfse?.nNFSe,
                 chave: response.chaveAcesso,
                 urlPdf: artefatos.pdfPath || artefatos.htmlPath || null,
@@ -248,7 +248,7 @@ export async function emitirNFSe({
                 response,
             });
             await atualizarNotaResultado(supabaseNotaId, {
-                status: "autorizada",
+                status: "autorizado",
                 numero: response.nfse?.infNfse?.nNFSe,
                 chave: response.chaveAcesso,
                 dataEmissao: new Date().toISOString(),
@@ -265,7 +265,7 @@ export async function emitirNFSe({
                 notaId,
                 referencia,
                 emissor,
-                status: "autorizada",
+                status: "autorizado",
                 chaveAcesso: response.chaveAcesso,
                 numero: response.nfse?.infNfse?.nNFSe,
                 pdfPath: artefatos.pdfPath,
@@ -294,9 +294,9 @@ export async function emitirNFSe({
         });
         const focusStatus =
             result.status === "autorizado"
-                ? "autorizada"
+                ? "autorizado"
                 : result.status === "erro_autorizacao"
-                ? "rejeitada"
+                ? "rejeitado"
                 : "pendente";
         persistirResultado({
             notaId,
@@ -310,12 +310,12 @@ export async function emitirNFSe({
             status: focusStatus,
             numero: result.numero,
             chave: result.codigo_verificacao,
-            dataEmissao: focusStatus === "autorizada" ? new Date().toISOString() : undefined,
+            dataEmissao: focusStatus === "autorizado" ? new Date().toISOString() : undefined,
             response: result,
             erro: result.erros?.[0]?.mensagem,
         });
         return {
-            ok: focusStatus === "autorizada",
+            ok: focusStatus === "autorizado",
             notaId,
             referencia,
             emissor,
@@ -337,7 +337,7 @@ export async function emitirNFSe({
             ).run(JSON.stringify(dpsPayload).slice(0, 50_000), notaId);
         }
         await atualizarNotaResultado(supabaseNotaId, {
-            status: "rejeitada",
+            status: "rejeitado",
             erro: err.message,
             response: {
                 error: err.message,
@@ -347,7 +347,7 @@ export async function emitirNFSe({
         });
         persistirResultado({
             notaId,
-            status: "rejeitada",
+            status: "rejeitado",
             erro: err.message,
             response: {
                 error: err.message,
@@ -382,7 +382,7 @@ export async function emitirNFSe({
                 notaId,
                 referencia,
                 emissor,
-                status: "rejeitada",
+                status: "rejeitado",
                 erro: msgSefaz,
             };
         }

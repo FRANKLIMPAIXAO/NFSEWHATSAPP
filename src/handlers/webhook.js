@@ -383,7 +383,7 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
             chaveAcesso: result.chaveAcesso,
         });
 
-        if (result.status === "autorizada") {
+        if (result.status === "autorizado") {
             const numero_nfse = result.numero || result.chaveAcesso?.slice(-8) || "—";
             const valorFmt = Number(payload.servico.valor_total).toFixed(2);
 
