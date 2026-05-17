@@ -90,11 +90,19 @@ export async function handleFocusWebhook(body) {
             "autorizado",
             nota.id
         );
+        // Focus envia URL do PDF (ou da página do portal pra ABRASF municipal)
+        // em `body.url` ou `body.url_danfse`. Persistimos no Supabase
+        // (caminho_pdf) pra o frontend do Pac mostrar o botão "Ver PDF".
+        const urlPdf = body.url || body.url_danfse || null;
+        const urlXml = body.caminho_xml_nota_fiscal || null;
+
         await atualizarNotaResultado({ ref: referencia }, {
             status: "autorizado",
             numero,
             chave: codVerif,
             dataEmissao: new Date().toISOString(),
+            caminhoPdf: urlPdf,
+            caminhoXml: urlXml,
             response: body,
         }).catch((err) => logger.warn({ err: err.message }, "focus-webhook: falha atualizando Supabase"));
 
