@@ -337,16 +337,71 @@ export async function consultarNFSe(referencia, focusToken, empresa) {
     );
 }
 
-export async function baixarPdf(referencia, focusToken, empresa) {
-    const basePath = basePathPara(resolverPadrao(empresa));
-    const url = `${BASE_URL}${basePath}/${encodeURIComponent(referencia)}.pdf`;
-    const auth = Buffer.from(`${focusToken}:`).toString("base64");
-    const response = await fetch(url, {
-        headers: { Authorization: `Basic ${auth}` },
-    });
+// PDF válido começa com "%PDF-" (magic bytes). Se vier algo menor que isso
+// ou sem o header, é resposta de erro (HTML/JSON pequeno) — útil pra detectar
+// race condition quando webhook chega antes da Focus terminar de gerar o PDF.
+function ehPdfValido(buffer) {
+    if (!buffer || buffer.length < 100) return false;
+    const header = buffer.subarray(0, 5).toString("ascii");
+    return header === "%PDF-";
+}
+
+async function fetchPdfBuffer(url, headers) {
+    const response = await fetch(url, { headers });
     if (!response.ok) {
-        throw new Error(`Falha ao baixar PDF: HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    return buffer;
+    return Buffer.from(await response.arrayBuffer());
+}
+
+/**
+ * Baixa PDF da NFS-e. Tenta primeiro a URL S3 do payload (se vier do webhook
+ * já assinada, é caminho direto). Se não tiver, ou se vier inválido, cai pro
+ * endpoint /v2/nfse/<ref>.pdf da Focus.
+ *
+ * Race condition conhecida: webhook chega ~1s antes da Focus terminar de
+ * gerar o PDF. Faz até 3 tentativas com backoff (2s/4s/8s) validando magic
+ * bytes "%PDF-" antes de aceitar.
+ */
+export async function baixarPdf(referencia, focusToken, empresa, urlPayload) {
+    const basePath = basePathPara(resolverPadrao(empresa));
+    const urlFocus = `${BASE_URL}${basePath}/${encodeURIComponent(referencia)}.pdf`;
+    const auth = Buffer.from(`${focusToken}:`).toString("base64");
+    const authHeaders = { Authorization: `Basic ${auth}` };
+
+    const tentativas = [
+        { url: urlPayload, headers: {}, label: "url_payload" },
+        { url: urlFocus, headers: authHeaders, label: "focus_pdf_endpoint" },
+    ].filter((t) => !!t.url);
+
+    let ultimoErro = null;
+    for (let i = 0; i < 3; i++) {
+        for (const tent of tentativas) {
+            try {
+                const buf = await fetchPdfBuffer(tent.url, tent.headers);
+                if (ehPdfValido(buf)) {
+                    logger.info(
+                        { referencia, tamanho: buf.length, origem: tent.label, tentativa: i + 1 },
+                        "PDF baixado e validado"
+                    );
+                    return buf;
+                }
+                logger.warn(
+                    { referencia, tamanho: buf.length, origem: tent.label, tentativa: i + 1 },
+                    "PDF inválido (sem magic bytes), tentando próxima fonte/retry"
+                );
+            } catch (err) {
+                ultimoErro = err;
+                logger.warn(
+                    { referencia, origem: tent.label, tentativa: i + 1, err: err.message },
+                    "falha baixando PDF, tentando próxima fonte/retry"
+                );
+            }
+        }
+        // backoff exponencial entre rodadas: 2s, 4s
+        if (i < 2) await new Promise((r) => setTimeout(r, 2000 * (i + 1) * (i + 1)));
+    }
+    throw new Error(
+        `Falha ao baixar PDF após 3 tentativas: ${ultimoErro?.message || "PDF inválido"}`
+    );
 }

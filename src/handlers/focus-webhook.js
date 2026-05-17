@@ -97,8 +97,18 @@ export async function handleFocusWebhook(body) {
         }).catch((err) => logger.warn({ err: err.message }, "focus-webhook: falha atualizando Supabase"));
 
         if (conversa?.whatsapp) {
+            // Focus envia URL do PDF no payload (`url` ou `url_danfse`). Quando
+            // disponível, usar S3 direto evita race condition do endpoint
+            // /v2/nfse/<ref>.pdf que pode retornar antes da Focus terminar
+            // de gerar o arquivo.
+            const urlPdfPayload = body.url || body.url_danfse || null;
             try {
-                const pdfBuffer = await baixarPdf(referencia, empresa.focus_token, empresa);
+                const pdfBuffer = await baixarPdf(
+                    referencia,
+                    empresa.focus_token,
+                    empresa,
+                    urlPdfPayload
+                );
                 await enviarPdf(
                     conversa.whatsapp,
                     pdfBuffer,
@@ -107,10 +117,11 @@ export async function handleFocusWebhook(body) {
                 );
             } catch (err) {
                 logger.error({ err: err.message, referencia }, "focus-webhook: erro baixando/enviando PDF");
-                // Se falhar o PDF, ao menos avisa em texto.
+                // Fallback: manda texto com link direto pro PDF (se a Focus mandou)
+                const linhaLink = urlPdfPayload ? `\nPDF: ${urlPdfPayload}` : "";
                 await enviarTexto(
                     conversa.whatsapp,
-                    `${formatarMensagemNotaEmitida(nota, numero)}\nCódigo de verificação: ${codVerif || "—"}`
+                    `${formatarMensagemNotaEmitida(nota, numero)}\nCódigo de verificação: ${codVerif || "—"}${linhaLink}`
                 ).catch(() => {});
             }
             finalizarConversa.run("finalizada", conversa.id);
