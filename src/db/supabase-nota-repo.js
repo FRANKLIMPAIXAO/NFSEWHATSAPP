@@ -32,8 +32,24 @@ export async function inserirNotaPendente({
     referencia,
     competencia,
 }) {
-    if (!isEnabled()) return null;
-    if (!empresa?._supabaseId || !empresa?._supabaseUserId) return null;
+    if (!isEnabled()) {
+        logger.warn({ referencia }, "supabase-nota: skip (cliente desligado)");
+        return null;
+    }
+    if (!empresa?._supabaseId) {
+        logger.warn(
+            { referencia, empresaId: empresa?.id },
+            "supabase-nota: skip (empresa sem _supabaseId — origem SQLite legado)"
+        );
+        return null;
+    }
+    if (!empresa?._supabaseUserId) {
+        logger.warn(
+            { referencia, empresaSupabaseId: empresa._supabaseId },
+            "supabase-nota: skip (empresa sem _supabaseUserId — coluna user_id NULL no Supabase?)"
+        );
+        return null;
+    }
 
     try {
         const { data, error } = await supabase
