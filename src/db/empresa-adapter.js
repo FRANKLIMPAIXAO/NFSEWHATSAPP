@@ -18,6 +18,22 @@ const CERTS_DIR = path.resolve(process.cwd(), "data", "certs");
 const certCache = new Map();
 
 /**
+ * Normaliza flag boolean lida do Supabase. Defensivo contra coluna criada
+ * como TEXT (string "true"/"false") ou SMALLINT (0/1) por engano. Retorna
+ * boolean estrito, default false quando indeterminado.
+ */
+function normalizarFlagBoolean(valor) {
+    if (typeof valor === "boolean") return valor;
+    if (typeof valor === "number") return valor !== 0;
+    if (typeof valor === "string") {
+        const s = valor.trim().toLowerCase();
+        if (s === "true" || s === "t" || s === "1") return true;
+        if (s === "false" || s === "f" || s === "0" || s === "") return false;
+    }
+    return false;
+}
+
+/**
  * Traduz regime_tributario (smallint do Pac, padrão CRT da NFe) → string
  * que o agent usa internamente. Só MEI + Simples são suportados — o
  * nicho-alvo (oficina/mecânica/pequeno prestador) não inclui Lucro Real
@@ -139,15 +155,15 @@ export function supabaseRowToEmpresa(row) {
         // exige no <cTribMun>). Sem isso, fallback pro LC 116 6 dígitos
         // (provavelmente rejeitado pelo XSD municipal).
         codigo_atividade_municipal: row.codigo_atividade_municipal || undefined,
-        // Cenário C - Ambiente Nacional NFSe (LC 214/2025): true → endpoint
-        // /v2/nfsen + montarPayloadNacional. Goiânia, Aparecida e outros
-        // estão neste cenário em 2026 (formato + ambiente Nacional).
-        // Empresa precisa ter "Ambiente da NFSe Nacional" habilitado no
-        // painel Focus. Default undefined → cai no env FOCUS_NFE_PADRAO.
-        usa_nfse_nacional:
-            typeof row.usa_nfse_nacional === "boolean"
-                ? row.usa_nfse_nacional
-                : undefined,
+        // Ambiente Nacional NFSe (LC 214/2025): true → endpoint /v2/nfsen +
+        // montarPayloadNacional. Goiânia ainda usa ABRASF municipal em 2026
+        // (false); Aparecida já migrou pro Nacional (true). Empresa precisa
+        // ter "Ambiente da NFSe Nacional" habilitado no painel Focus.
+        //
+        // Normaliza valor: aceita boolean, "true"/"false" string (Supabase
+        // pode armazenar como text se coluna foi criada errado), 0/1, null.
+        // Default false (caminho municipal/ABRASF) quando indeterminado.
+        usa_nfse_nacional: normalizarFlagBoolean(row.usa_nfse_nacional),
 
         // WhatsApp
         whatsapp_dono: row.whatsapp_dono,
