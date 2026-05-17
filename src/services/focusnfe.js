@@ -11,10 +11,13 @@
 import { logger } from "../utils/logger.js";
 
 const ENV = process.env.FOCUS_NFE_ENV || "homologacao";
-// Default MUNICIPAL (ABRASF/IssNet) — esmagadora maioria dos municípios em
-// 2026 ainda usa ISSNet próprio (Goiânia, Aparecida, etc). Só sobrescrever
-// pra "nacional" se o município confirmadamente está parametrizado pro EPN
-// da União (consultar nfse.gov.br). Empresa pode forçar via empresa.usa_nfse_nacional.
+// Default MUNICIPAL (ABRASF v2.04). Estágio Reforma em mai/2026 varia POR
+// MUNICÍPIO, não por UF:
+//   - Goiânia (5208707) → ABRASF v2.04 puro, SEM IBS/CBS. Comprovado por
+//     notas reais HC#15 (22/04), Roca#11 (28/04), Centro Oeste#96 (14/05).
+//   - Aparecida (5201405) → JÁ NFS-e Nacional 1.01 com IBS/CBS completo.
+//     Comprovado pela nota Pac Inteligência #267 (10/04).
+// Empresa pode forçar via empresa.usa_nfse_nacional. Default municipal.
 const PADRAO_DEFAULT = process.env.FOCUS_NFE_PADRAO || "municipal";
 const BASE_URL =
     ENV === "producao"
@@ -33,34 +36,38 @@ function basePathPara(padrao) {
     return padrao === "nacional" ? "/v2/nfsen" : "/v2/nfse";
 }
 
-// Código do serviço NACIONAL (DPS) — 6 dígitos: 2 Item + 2 Subitem + 2 Desdobro
-// Nacional. cServTribNac do XSD Nacional exige 6 dígitos puros (Tabela CGSN).
+// NFS-e NACIONAL (Aparecida, EPN) — cServTribNac da Tabela CGSN, 6 dígitos puros.
 // "14.01" → "140100" | "1401" → "140100" | "171901" → "171901"
-function codigoServico6Digitos(codigo) {
+function codigoCGSN6Digitos(codigo) {
     const d = String(codigo || "").replace(/\D/g, "");
     return d.padEnd(6, "0").slice(0, 6);
 }
 
-// IMPORTANTE — Focus API vs XML final:
-// O JSON enviado pra Focus usa 6 DÍGITOS no item_lista_servico ("170100"),
-// e a Focus converte pra "X.XX" string ("17.01") no XML final pra Goiânia.
-// XMLs reais (HC #15, Roca #11, CO #96) mostram "17.01" no <ItemListaServico>
-// mas isso é o output da Focus, não o input. Mensagem 422 da Focus quando
-// recebe "X.XX": "código composto por 6 dígitos numéricos". Reusa
-// codigoServico6Digitos definido acima.
-
-// cTribMun: XSD Nacional pós-Reforma (namespace sped.fazenda.gov.br/nfse)
-// exige EXATAMENTE 3 dígitos (pattern [0-9]{3}). Goiânia migrou pra esse
-// formato em prod 2026, mesmo emitindo via IssNet — Focus converte. XMLs
-// antigos (ABRASF 2.04) tinham 4 dig — não mais aceitos.
-// HC cadastrada com "1701" → enviamos "170" (Item LC 116 17 + dígito 0).
-function codigoTribMun3Digitos(codigo) {
-    return String(codigo || "").replace(/\D/g, "").slice(0, 3);
+// ABRASF v2.04 (Goiânia) — ItemListaServico no formato decimal "XX.XX" (LC 116).
+// Comprovado pelas notas reais Roca #11 ("14.01"), HC #15 ("17.01"), Centro
+// Oeste #96 ("11.04"). Aceita entrada flexível: "17.01", "1701", "170100".
+function formatarItemABRASF(codigo) {
+    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
+    if (d.length < 3) return d;
+    return d.slice(0, 2) + "." + d.slice(2).padEnd(2, "0");
 }
 
-// Normaliza discriminacao pro charset aceito pelo ABRASF de Goiânia (XSD
-// nfse_gyn_v02.xsd): "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&$%()/+-.,;:=* ".
-// Sem acentos, sem ç, sem minúsculas. Quebra de linha vira espaço.
+// ABRASF v2.04 (Goiânia) — CodigoTributacaoMunicipio no formato 4 dígitos sem
+// ponto. Notas reais: Roca "1401", HC "1701", Centro Oeste "1104".
+function formatarCodTribMunABRASF(codigo) {
+    return String(codigo || "").replace(/\D/g, "").slice(0, 4);
+}
+
+// XSD Nacional pós-Reforma (sped.fazenda.gov.br/nfse) — cTribMun com pattern
+// próprio do município (Aparecida nota #267 usa 7 dígitos "6920601").
+function formatarCodTribMunNacional(codigo) {
+    return String(codigo || "").replace(/\D/g, "").slice(0, 7);
+}
+
+// Normaliza discriminacao removendo acentos/diacríticos e caracteres exóticos.
+// Converte tudo pra MAIÚSCULAS — formato dominante nas notas em prod (Roca #11,
+// Centro Oeste #96). HC #15 tem misto mas maiúsculas é mais seguro contra
+// rejeição XSD em municípios mais restritos.
 function normalizarDiscriminacao(texto) {
     if (!texto) return "";
     return String(texto)
@@ -113,32 +120,32 @@ async function focusFetch(method, path, token, body) {
     return data;
 }
 
+// Monta payload Focus pra municípios ainda em ABRASF v2.04 (ex: Goiânia).
+// Espelha exatamente o formato das notas reais Roca #11, HC #15, Centro Oeste
+// #96 emitidas em prod 2026. SEM campos da Reforma Tributária (IBS/CBS, finNFSe,
+// cIndOp, tribFed, totTrib) — esses só valem pro padrão Nacional.
 function montarPayloadMunicipal({ referencia, empresa, tomador, servico, competencia }) {
     let inscricaoMunicipal = empresa.inscricao_municipal || null;
-    let enderecoEmpresa = {};
-    if (empresa.endereco_json) {
+    if (!inscricaoMunicipal && empresa.endereco_json) {
         try {
-            enderecoEmpresa = JSON.parse(empresa.endereco_json) || {};
-            if (!inscricaoMunicipal && enderecoEmpresa.inscricao_municipal) {
-                inscricaoMunicipal = enderecoEmpresa.inscricao_municipal;
-            }
+            const end = JSON.parse(empresa.endereco_json) || {};
+            inscricaoMunicipal = end.inscricao_municipal || null;
         } catch {}
     }
 
     const optanteSimples = empresa.regime === "simples_nacional";
     const aliquotaServico = Number(empresa.aliquota_iss) || 0;
 
-    // item_lista_servico: 6 dígitos no JSON pra Focus aceitar pre-validation.
-    // Fonte: empresa.servico_padrao_lc116 (cadastrado no Pac) — emissor.js
-    // já injeta no servico.codigo_lc116. Extractor LLM não é fonte confiável.
-    const itemListaServico = codigoServico6Digitos(servico.codigo_lc116);
+    // ItemListaServico: formato decimal "XX.XX" (LC 116). Fonte:
+    // empresa.servico_padrao_lc116 — emissor.js já injetou em codigo_lc116.
+    const itemListaServico = formatarItemABRASF(servico.codigo_lc116);
 
-    // cTribMun: 3 dígitos exatos (XSD Nacional pós-Reforma pattern [0-9]{3}).
-    // Trunca o que vier (cadastro municipal "1701" → "170").
-    const codigoTributarioMunicipio = codigoTribMun3Digitos(
+    // CodigoTributacaoMunicipio: 4 dígitos (cadastro próprio do município).
+    // Notas Goiânia mostram "1701", "1401", "1104".
+    const codigoTributarioMunicipio = formatarCodTribMunABRASF(
         servico.codigo_tributario_municipio ||
             empresa.codigo_atividade_municipal ||
-            itemListaServico
+            servico.codigo_lc116
     );
 
     const numeroRps = Math.floor(Date.now() / 1000);
@@ -152,24 +159,12 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         data_emissao: agoraBrtIso(),
         optante_simples_nacional: optanteSimples,
         incentivador_cultural: false,
-        regime_especial_tributacao: optanteSimples ? 6 : undefined,
-        codigo_opcao_simples_nacional: optanteSimples ? "3" : "1",
-        // Reforma Tributária — campos OBRIGATÓRIOS no XSD pós-Reforma.
-        // finalidade_emissao "0" = NFSe regular → vira <finNFSe> que vem
-        // ANTES de cIndOp na ordem dos elementos. Sem ele, XSD reclama
-        // "cIndOp not expected, expected finNFSe".
-        finalidade_emissao: "0",
-        // consumidor_final: 1=PF consumidor final, 0=PJ ou intermediário.
-        consumidor_final: tomador.tipo === "PF" ? "1" : "0",
         prestador: {
             cnpj: empresa.cnpj,
-            // IM só pode ser enviada se município está integrado ao CNC NFS-e
-            // Nacional. Caso contrário SEFAZ retorna E0120 ("IM do prestador
-            // não deve ser informado"). Goiânia/Aparecida hoje (mai/2026)
-            // estão FORA do CNC — empresa.municipio_no_cnc=false → omite IM.
-            inscricao_municipal: empresa.municipio_no_cnc
-                ? inscricaoMunicipal || undefined
-                : undefined,
+            // ABRASF v2.04 aceita IM normalmente — notas Goiânia trazem
+            // <InscricaoMunicipal> preenchida. Só omitir no padrão Nacional
+            // quando município está fora do CNC (regra E0120 do XSD Nacional).
+            inscricao_municipal: inscricaoMunicipal || undefined,
             codigo_municipio: empresa.municipio_codigo,
         },
         tomador: {
@@ -180,8 +175,6 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         },
         servico: {
             valor_servicos: servico.valor_total,
-            // iss_retido false → <IssRetido>2</IssRetido> (Não retido).
-            // Também resolve XSD pós-Reforma exigindo <tribMun><tpRetISSQN>.
             iss_retido: false,
             aliquota: aliquotaServico,
             discriminacao: normalizarDiscriminacao(servico.descricao),
@@ -189,23 +182,11 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
             codigo_tributario_municipio: codigoTributarioMunicipio,
             codigo_cnae: empresa.cnae || undefined,
             codigo_municipio: empresa.municipio_codigo,
-            percentual_total_tributos: aliquotaServico || 6,
-            fonte_total_tributos: "IBPT",
-            // Reforma Tributária — campos (RT) da doc Focus. Goiânia pós-Reforma
-            // pode estar exigindo esses pra ativar geração completa do <trib>.
-            // codigo_indicador_operacao: usa cadastro empresa ou default 030101.
-            codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
-            // IBS/CBS pra Simples: CST=200, cClassTrib=200052 (valores zerados,
-            // tributos via DAS). Pra regime normal, deixar undefined.
-            ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
-            ibs_cbs_classificacao_tributaria: optanteSimples ? "200052" : undefined,
         },
         numero: numeroRps,
         serie: "1",
     };
 
-    // Goiânia ABRASF v02: pra tomador PF sem endereço, NÃO enviar bloco
-    // <Endereco> (doc oficial XSD). Pra PJ ou PF com endereço completo, envia.
     if (temEnderecoReal) {
         payload.tomador.endereco = {
             logradouro: tomadorEndereco.logradouro,
@@ -221,8 +202,6 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
         };
     }
 
-    // Pra Simples Nacional NÃO enviar natureza_operacao (Base44 explícito:
-    // enviar quebra validação XSD exigindo <trib><tribFed>/<totTrib>).
     if (!optanteSimples) {
         payload.natureza_operacao = 1;
     }
@@ -233,30 +212,29 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
 function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
     const optanteSimples = empresa.regime === "simples_nacional";
 
-    // codigo_tributacao_nacional_iss: 6 dígitos da Tabela CGSN (NFS-e Nacional).
-    // Para LC 14.01 (manutenção/reparação de veículos) → 140100.
+    // codigo_tributacao_nacional_iss: 6 dígitos da Tabela CGSN.
+    // Ex: 171901 = Contabilidade (nota Pac #267).
     const codTribNacional = Number(
-        codigoServico6Digitos(
+        codigoCGSN6Digitos(
             servico.codigo_tributacao_nacional ||
                 empresa.codigo_tributacao_nacional ||
                 servico.codigo_lc116
         )
     );
 
-    // Numero DPS único na faixa 1..999999999999999 (15 dígitos). Usamos timestamp em segundos.
+    // Numero DPS único 1..999999999999999. Timestamp em segundos.
     const numeroDps = Math.floor(Date.now() / 1000);
 
     const dataEmissao = agoraBrtIso();
 
-    // codigo_tributacao_municipal_iss: 3 dígitos, padrão definido pelo município.
-    // HC cadastrada com "1701" no perfil municipal → truncamos pra 3 dig "170".
-    const codTribMunicipal = String(
+    // codigo_tributacao_municipal_iss: padrão próprio do município.
+    // Aparecida nota #267 usa 7 dígitos (cTribMun "6920601" = CNAE da
+    // prefeitura). Aceita string até 7 dígitos.
+    const codTribMunicipal = formatarCodTribMunNacional(
         servico.codigo_tributario_municipio ||
             empresa.codigo_atividade_municipal ||
             ""
-    )
-        .replace(/\D/g, "")
-        .slice(0, 3);
+    );
 
     const payload = {
         data_emissao: dataEmissao,
