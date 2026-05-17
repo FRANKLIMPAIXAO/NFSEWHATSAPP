@@ -225,11 +225,13 @@ export function getOrCreateMirrorEmpresa(empresaSupa) {
 export const findConversaAtiva = db.prepare(`
     SELECT * FROM conversas
     WHERE empresa_id = ? AND whatsapp = ?
-      AND estado IN ('aguardando_confirmacao', 'aguardando_dados', 'aguardando_aprovacao_admin')
+      AND estado IN ('aguardando_confirmacao', 'aguardando_dados')
     ORDER BY iniciada_em DESC LIMIT 1
 `);
-// Nota: 'aguardando_aprovacao_admin' permanece na query para que o handler
-// detecte e responda ao cliente com mensagem de aguardo (sem reextrair).
+// Modelo Pac multi-tenant: o dono confirma "Sim" e emite direto. Não tem mais
+// estado intermediário 'aguardando_aprovacao_admin'. Conversas em
+// 'aguardando_sefaz' (callback async pós-emissão) NÃO entram na query — uma
+// nova msg do dono nesse estado cria conversa nova (paralela).
 
 export const findConversaById = db.prepare(`
     SELECT * FROM conversas WHERE id = ?

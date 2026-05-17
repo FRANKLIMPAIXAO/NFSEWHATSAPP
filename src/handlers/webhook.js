@@ -2,27 +2,33 @@
  * src/handlers/webhook.js
  * Handler principal: recebe webhook do WhatsApp e orquestra o fluxo.
  *
- * FLUXO COMPLETO:
- *  1. Identifica empresa pelo número
- *  2. Se mensagem é áudio: baixa, transcreve, extrai
- *     Se é texto: trata como confirmação ou complemento
- *  3. Se extração tá ok: pede confirmação
- *  4. Se cliente confirma: emite (com ou sem aprovação admin)
- *  5. Devolve PDF
+ * Modelo Pac no Bolso multi-tenant: cada empresa cadastrada tem 1 dono
+ * (whatsapp_dono no Supabase) que é o responsável legal. A própria
+ * autenticação acontece via mesmoNumeroBr(numero_recebido, whatsapp_dono).
+ * Sem aprovação central — o dono confirma e emite direto. Comando "cancelar"
+ * (ou variantes) aborta a conversa em qualquer estado intermediário.
+ *
+ * FLUXO:
+ *  1. Identifica empresa pelo número que mandou a msg
+ *  2. Se for áudio: baixa, transcreve, extrai
+ *     Se for texto: trata como confirmação/complemento/cancelamento
+ *  3. Se extração ok: pede confirmação
+ *  4. Se o dono confirma "Sim": emite direto
+ *  5. Devolve PDF (síncrono via emitirEEnviarPdf ou async via focus-webhook)
+ *
+ * ADMIN_WHATSAPP: continua usado APENAS pra alertas operacionais (rejeição
+ * SEFAZ, erro técnico) — monitoramento, não aprovação.
  */
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import {
     findEmpresaByWhatsapp,
-    findEmpresaById,
     findConversaAtiva,
-    findConversaById,
     insertConversa,
     updateConversa,
     finalizarConversa,
     registrarMensagemProcessada,
     logEvento,
-    mesmoNumeroBr,
     getOrCreateMirrorEmpresa,
 } from "../db/index.js";
 import { findEmitenteByWhatsapp } from "../db/supabase-repo.js";
@@ -39,8 +45,12 @@ import {
 import { formatarResumoCliente } from "../utils/resumo.js";
 import { logger } from "../utils/logger.js";
 
-const APPROVAL_MODE = process.env.APPROVAL_MODE || "manual_approval";
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP;
+
+// Regex de cancelamento explícito pelo dono. Match exato (palavra sozinha ou
+// no início) pra não pegar falso-positivo quando "cancelar" aparece dentro
+// de uma descrição de serviço maior.
+const CANCELAR_REGEX = /^(cancelar|cancela|cancelo|desistir|desisto|parar|para)\b\.?\s*$/i;
 
 /**
  * Entrada principal.
@@ -88,15 +98,7 @@ export async function handleWebhook(evt) {
     logger.info({ numero, tipo, messageId }, "msg recebida");
     logEvento("msg_recebida", null, null, { numero, tipo, messageId });
 
-    // ---------- 1. TRATAMENTO ESPECIAL: APROVAÇÃO ADMIN ----------
-    // Precisa vir ANTES da identificação de empresa: o admin pode não ter
-    // empresa cadastrada com o próprio número.
-    if (mesmoNumeroBr(numero, ADMIN_WHATSAPP) && texto) {
-        const tratado = await tratarRespostaAdmin(texto);
-        if (tratado) return;
-    }
-
-    // ---------- 2. IDENTIFICAR EMPRESA ----------
+    // ---------- 1. IDENTIFICAR EMPRESA ----------
     // Estratégia dual-mode: tenta Supabase (Pac no Bolso) primeiro.
     // Se Supabase está desligado, não acha o número, ou falha → cai pro
     // SQLite local. Garante que Roca/El Shadai (cadastradas só no SQLite)
@@ -130,20 +132,30 @@ export async function handleWebhook(evt) {
         return;
     }
 
-    // ---------- 3. CONVERSA EM ANDAMENTO? ----------
+    // ---------- 2. CONVERSA EM ANDAMENTO? ----------
     const conversaAtiva = findConversaAtiva.get(empresa.id, numero);
 
-    // Se a conversa está aguardando aprovação do admin, qualquer nova mensagem
-    // do cliente deve só informar — não pode entrar no extrator e sobrescrever.
-    if (conversaAtiva?.estado === "aguardando_aprovacao_admin") {
-        await enviarTexto(
-            numero,
-            "Sua emissão está em validação com a equipe. Assim que aprovada eu te aviso. ⏳"
-        );
+    // Comando "cancelar" do próprio dono — aborta a conversa em qualquer
+    // estado intermediário. Não confunde com conteúdo da nota porque o
+    // regex casa só a palavra sozinha.
+    if (texto && CANCELAR_REGEX.test(texto.trim())) {
+        if (conversaAtiva) {
+            finalizarConversa.run("cancelada", conversaAtiva.id);
+            await enviarTexto(
+                numero,
+                "❌ Emissão cancelada. Quando quiser, manda áudio novo pra recomeçar."
+            );
+            logEvento("conversa_cancelada_dono", empresa.id, conversaAtiva.id, {});
+        } else {
+            await enviarTexto(
+                numero,
+                "Não tem nenhuma emissão em andamento agora. Manda áudio quando quiser emitir."
+            );
+        }
         return;
     }
 
-    // ---------- 4. PROCESSAR MENSAGEM ----------
+    // ---------- 3. PROCESSAR MENSAGEM ----------
     let textoExtracao = null;
     // Mídia visual coletada da mensagem (imagens e/ou PDF) pra extractor multimodal
     let imagensExtracao = [];
@@ -339,85 +351,14 @@ export async function handleWebhook(evt) {
 }
 
 /**
- * Processa quando o cliente confirma a emissão.
+ * Processa quando o dono confirma a emissão ("Sim").
+ * O dono é o responsável legal pela empresa cadastrada — autenticação
+ * implícita via número. Emite direto, sem aprovação de admin central.
  */
 async function processarConfirmacao(conversa, empresa, numero) {
-    const payload = JSON.parse(conversa.payload_json);
-
-    if (APPROVAL_MODE === "manual_approval" && ADMIN_WHATSAPP) {
-        // Marca conversa como aguardando admin
-        updateConversa.run(
-            "aguardando_aprovacao_admin",
-            conversa.payload_json,
-            null,
-            conversa.id
-        );
-
-        const resumo =
-            `🔔 *Aprovação necessária*\n\n` +
-            `Empresa: ${empresa.razao_social}\n` +
-            `Cliente: ${numero}\n\n` +
-            `${payload.resumo_confirmacao}\n\n` +
-            `Responda *APROVAR ${conversa.id}* ou *REJEITAR ${conversa.id}*`;
-
-        await enviarTexto(ADMIN_WHATSAPP, resumo);
-        await enviarTexto(
-            numero,
-            "Confirmado! Estou validando com a equipe e já te aviso. ⏳"
-        );
-        return;
-    }
-
-    // Modo automático: emite direto
     await emitirEEnviarPdf(conversa, empresa, numero);
 }
 
-/**
- * Trata respostas do admin (APROVAR/REJEITAR).
- * @returns {boolean} true se a mensagem foi tratada como ação admin
- */
-async function tratarRespostaAdmin(texto) {
-    const matchAprovar = texto.match(/^aprovar\s+(\d+)/i);
-    const matchRejeitar = texto.match(/^rejeitar\s+(\d+)/i);
-
-    if (matchAprovar) {
-        const conversaId = parseInt(matchAprovar[1], 10);
-        const conv = findConversaById.get(conversaId);
-        if (!conv) {
-            await enviarTexto(ADMIN_WHATSAPP, `Conversa ${conversaId} não encontrada.`);
-            return true;
-        }
-
-        const empresa = findEmpresaById.get(conv.empresa_id);
-        if (!empresa) {
-            await enviarTexto(
-                ADMIN_WHATSAPP,
-                `Empresa da conversa ${conversaId} não encontrada.`
-            );
-            return true;
-        }
-
-        await emitirEEnviarPdf(conv, empresa, conv.whatsapp);
-        await enviarTexto(ADMIN_WHATSAPP, `✅ Conversa ${conversaId} emitida.`);
-        return true;
-    }
-
-    if (matchRejeitar) {
-        const conversaId = parseInt(matchRejeitar[1], 10);
-        const conv = findConversaById.get(conversaId);
-        if (conv) {
-            finalizarConversa.run("cancelada", conv.id);
-            await enviarTexto(
-                conv.whatsapp,
-                "Tive que cancelar essa emissão. Vou te chamar pra explicar."
-            );
-            await enviarTexto(ADMIN_WHATSAPP, `❌ Conversa ${conversaId} rejeitada.`);
-        }
-        return true;
-    }
-
-    return false;
-}
 
 /**
  * Emite a NFS-e via roteador (Focus ou EPN) e devolve o PDF pelo WhatsApp.
