@@ -96,9 +96,15 @@ export async function inserirNotaPendente({
 /**
  * Atualiza row de poupeja_nfse com resultado final (autorizada ou rejeitada).
  *
- * @param {string|null} supabaseNotaId - UUID retornado por inserirNotaPendente
+ * Aceita identificação por UUID OU por ref (string `<empresaId>-<ts>-<rnd>`).
+ * A ref é a chave natural — gerada pelo emissor.js, sempre disponível no
+ * fluxo síncrono e no webhook async. UUID é só convenience interna.
+ *
+ * @param {object} ident
+ * @param {string} [ident.supabaseNotaId] - UUID retornado por inserirNotaPendente
+ * @param {string} [ident.ref] - referência gerada pelo emissor (preferido em webhook async)
  * @param {object} params
- * @param {string} params.status - 'autorizada' | 'rejeitada'
+ * @param {string} params.status - 'autorizada' | 'rejeitada' | 'cancelada'
  * @param {string} [params.numero]
  * @param {string} [params.chave]
  * @param {string} [params.dataEmissao] - ISO string
@@ -107,8 +113,23 @@ export async function inserirNotaPendente({
  * @param {object} [params.response] - resposta SEFAZ (vai em response_payload jsonb)
  * @param {string} [params.erro]
  */
-export async function atualizarNotaResultado(supabaseNotaId, params) {
-    if (!isEnabled() || !supabaseNotaId) return;
+export async function atualizarNotaResultado(ident, params) {
+    if (!isEnabled()) return;
+
+    // Compat: chamadas antigas passavam só o supabaseNotaId como 1º argumento.
+    // Se for string, trata como UUID. Se for objeto, lê {supabaseNotaId, ref}.
+    let supabaseNotaId = null;
+    let ref = null;
+    if (typeof ident === "string") {
+        supabaseNotaId = ident;
+    } else if (ident && typeof ident === "object") {
+        supabaseNotaId = ident.supabaseNotaId || null;
+        ref = ident.ref || null;
+    }
+    if (!supabaseNotaId && !ref) {
+        logger.warn({ params }, "supabase-nota: atualizar chamado sem id nem ref — skip");
+        return;
+    }
 
     const update = {
         status: params.status,
@@ -129,19 +150,19 @@ export async function atualizarNotaResultado(supabaseNotaId, params) {
     }
 
     try {
-        const { error } = await supabase
-            .from("poupeja_nfse")
-            .update(update)
-            .eq("id", supabaseNotaId);
+        let query = supabase.from("poupeja_nfse").update(update);
+        if (supabaseNotaId) query = query.eq("id", supabaseNotaId);
+        else query = query.eq("ref", ref);
+        const { error } = await query;
         if (error) {
             logger.error(
-                { err: error.message, supabaseNotaId },
+                { err: error.message, supabaseNotaId, ref },
                 "supabase-nota: erro atualizando resultado"
             );
         }
     } catch (err) {
         logger.error(
-            { err: err.message, supabaseNotaId },
+            { err: err.message, supabaseNotaId, ref },
             "supabase-nota: exception atualizando resultado"
         );
     }

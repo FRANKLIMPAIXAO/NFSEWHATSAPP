@@ -88,7 +88,7 @@ export async function handleFocusWebhook(body) {
             "autorizada",
             nota.id
         );
-        await atualizarNotaResultado(nota.supabase_id || null, {
+        await atualizarNotaResultado({ ref: referencia }, {
             status: "autorizada",
             numero,
             chave: codVerif,
@@ -142,7 +142,7 @@ export async function handleFocusWebhook(body) {
             novoStatus,
             nota.id
         );
-        await atualizarNotaResultado(nota.supabase_id || null, {
+        await atualizarNotaResultado({ ref: referencia }, {
             status: novoStatus,
             erro: String(motivo),
             response: body,
