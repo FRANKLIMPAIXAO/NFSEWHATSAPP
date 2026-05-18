@@ -7,6 +7,7 @@ import express from "express";
 import { timingSafeEqual } from "node:crypto";
 import { handleWebhook } from "./handlers/webhook.js";
 import { handleFocusWebhook } from "./handlers/focus-webhook.js";
+import { handleApiEmit } from "./handlers/api-emit.js";
 import { logger } from "./utils/logger.js";
 import { restoreCertsFromEnv } from "./utils/restore-certs.js";
 
@@ -16,6 +17,30 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const FOCUS_WEBHOOK_SECRET = process.env.FOCUS_WEBHOOK_SECRET;
+
+// CORS pra endpoints /api/* — painel PacNoBolso (em outro subdomínio/domain)
+// precisa enviar Authorization header. Lista explícita de origens é mais
+// segura que '*'. Adicionar domínio de preview do Vercel quando necessário.
+const ALLOWED_ORIGINS = new Set([
+    "https://pacnobolso.com.br",
+    "https://www.pacnobolso.com.br",
+    "https://nfse.pacnobolso.com.br",
+    "http://localhost:5173", // vite dev
+    "http://localhost:3000",
+    "http://localhost:8080",
+]);
+
+function aplicarCorsApi(req, res) {
+    const origin = req.headers.origin;
+    if (origin && ALLOWED_ORIGINS.has(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Max-Age", "600");
+}
 
 function isValidWebhookSecret(receivedSecret) {
     if (!WEBHOOK_SECRET) return true;
@@ -78,6 +103,20 @@ app.post("/webhooks/focus", async (req, res) => {
     } catch (err) {
         logger.error({ err: err.message, stack: err.stack }, "erro no focus-webhook");
     }
+});
+
+// Preflight CORS pra qualquer rota /api/*
+app.options("/api/*", (req, res) => {
+    aplicarCorsApi(req, res);
+    res.status(204).end();
+});
+
+// API HTTP — emissão de NFS-e pelo painel PacNoBolso (autenticado via JWT
+// do Supabase Auth). Mesma lógica interna do fluxo WhatsApp, sem extração
+// de áudio (recebe payload estruturado direto).
+app.post("/api/emit", async (req, res) => {
+    aplicarCorsApi(req, res);
+    await handleApiEmit(req, res);
 });
 
 const PORT = process.env.PORT || 3000;

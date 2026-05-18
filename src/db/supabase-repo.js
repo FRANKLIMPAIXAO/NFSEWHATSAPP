@@ -42,3 +42,37 @@ export async function findEmitenteByWhatsapp(numero) {
     }
     return data;
 }
+
+/**
+ * Busca emitente por ID, com guarda de autorização: só retorna se o
+ * `user_id` da empresa bater com o `userId` passado. Evita que um user
+ * autenticado emita nota em nome de empresa de outro user (escalonamento
+ * horizontal).
+ *
+ * Usado pelo endpoint POST /api/emit chamado pelo painel PacNoBolso.
+ *
+ * @param {string} empresaId — UUID da empresa em poupeja_fiscal_emitentes
+ * @param {string} userId — UUID do user autenticado (de auth.uid())
+ * @returns {Promise<object|null>}
+ */
+export async function findEmitenteByIdAndUser(empresaId, userId) {
+    if (!isEnabled()) return null;
+    if (!empresaId || !userId) return null;
+
+    const { data, error } = await supabase
+        .from("poupeja_fiscal_emitentes")
+        .select("*")
+        .eq("id", empresaId)
+        .eq("user_id", userId)
+        .limit(1)
+        .maybeSingle();
+
+    if (error) {
+        logger.error(
+            { err: error.message, empresaId, userId },
+            "supabase-repo: erro buscando emitente por id+user"
+        );
+        return null;
+    }
+    return data;
+}
