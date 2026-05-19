@@ -8,6 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { handleWebhook } from "./handlers/webhook.js";
 import { handleFocusWebhook } from "./handlers/focus-webhook.js";
 import { handleApiEmit } from "./handlers/api-emit.js";
+import { handleApiCobrar } from "./handlers/api-cobrar.js";
 import { logger } from "./utils/logger.js";
 import { restoreCertsFromEnv } from "./utils/restore-certs.js";
 
@@ -117,6 +118,14 @@ app.options("/api/*", (req, res) => {
 app.post("/api/emit", async (req, res) => {
     aplicarCorsApi(req, res);
     await handleApiEmit(req, res);
+});
+
+// API HTTP — cobrança via WhatsApp. Dispara lembrete pro whatsapp_dono
+// da empresa do user (Hipótese B: user recebe, vê cliente e link wa.me
+// pra cobrar direto).
+app.post("/api/cobrar", async (req, res) => {
+    aplicarCorsApi(req, res);
+    await handleApiCobrar(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
