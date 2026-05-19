@@ -25,6 +25,7 @@
  */
 import { supabase } from "../supabase.js";
 import { enviarTexto } from "../services/whatsapp.js";
+import { buscarCobrancaPendente } from "../services/asaas.js";
 import { logger } from "../utils/logger.js";
 
 function jsonResponse(res, status, body) {
@@ -62,7 +63,14 @@ function mapaPlano(planType) {
     }
 }
 
-function montarMensagem({ nome, plano, vencimento, diasAtraso, mensagemExtra }) {
+function montarMensagem({
+    nome,
+    plano,
+    vencimento,
+    diasAtraso,
+    mensagemExtra,
+    cobrancaAsaas,
+}) {
     if (mensagemExtra && mensagemExtra.trim()) {
         return mensagemExtra.trim();
     }
@@ -73,17 +81,54 @@ function montarMensagem({ nome, plano, vencimento, diasAtraso, mensagemExtra }) 
         "",
         `📦 *Plano:* ${plano}`,
     ];
-    if (vencimento) {
-        const atraso =
-            diasAtraso !== null && diasAtraso > 0
-                ? ` (${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"} em atraso)`
-                : "";
-        partes.push(`📅 *Vencimento:* ${formatarDataBR(vencimento)}${atraso}`);
+
+    // Se temos cobrança Asaas pendente, mostra os dados dela (mais precisos
+    // que os da subscription) + link de pagamento.
+    if (cobrancaAsaas) {
+        if (cobrancaAsaas.value) {
+            const valorFmt = Number(cobrancaAsaas.value).toLocaleString("pt-BR", {
+                style: "currency",
+                currency: "BRL",
+            });
+            partes.push(`💰 *Valor:* ${valorFmt}`);
+        }
+        if (cobrancaAsaas.dueDate) {
+            const diasCobranca = diasEntre(cobrancaAsaas.dueDate);
+            const atraso =
+                diasCobranca !== null && diasCobranca > 0
+                    ? ` (${diasCobranca} ${diasCobranca === 1 ? "dia" : "dias"} em atraso)`
+                    : "";
+            partes.push(
+                `📅 *Vencimento:* ${formatarDataBR(cobrancaAsaas.dueDate)}${atraso}`,
+            );
+        }
+        partes.push("");
+        if (cobrancaAsaas.invoiceUrl) {
+            partes.push(
+                "💳 *Pague online (PIX, cartão ou boleto):*",
+                cobrancaAsaas.invoiceUrl,
+            );
+        }
+        if (cobrancaAsaas.bankSlipUrl) {
+            partes.push("", "📄 *Boleto direto:*", cobrancaAsaas.bankSlipUrl);
+        }
+    } else {
+        // Fallback: usa dados da subscription (sem cobrança específica)
+        if (vencimento) {
+            const atraso =
+                diasAtraso !== null && diasAtraso > 0
+                    ? ` (${diasAtraso} ${diasAtraso === 1 ? "dia" : "dias"} em atraso)`
+                    : "";
+            partes.push(`📅 *Vencimento:* ${formatarDataBR(vencimento)}${atraso}`);
+        }
+        partes.push(
+            "",
+            "Pra regularizar:",
+            "👉 https://www.pacnobolso.com.br/plans",
+        );
     }
+
     partes.push(
-        "",
-        "Pra manter o acesso ativo, regularize por aqui:",
-        "👉 https://www.pacnobolso.com.br/plans",
         "",
         "Qualquer dúvida, é só responder essa mensagem.",
         "Equipe Pac no Bolso 🤖",
@@ -161,22 +206,38 @@ export async function handleApiCobrarAssinante(req, res) {
             });
         }
 
-        // 5. Busca subscription pra contexto
+        // 5. Busca subscription pra contexto + ID Asaas pra cobrança
         const { data: sub } = await supabase
             .from("poupeja_subscriptions")
-            .select("status, plan_type, current_period_end")
+            .select("status, plan_type, current_period_end, asaas_subscription_id, payment_gateway")
             .eq("user_id", user_id)
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle();
 
-        // 6. Monta mensagem
+        // 5.1. Se for Asaas, busca cobrança pendente atual (PIX/boleto/cartão)
+        let cobrancaAsaas = null;
+        if (sub?.asaas_subscription_id) {
+            cobrancaAsaas = await buscarCobrancaPendente(sub.asaas_subscription_id);
+            logger.info(
+                {
+                    user_id,
+                    asaas_subscription_id: sub.asaas_subscription_id,
+                    tem_cobranca: !!cobrancaAsaas,
+                    invoice: cobrancaAsaas?.id || null,
+                },
+                "api-cobrar-assinante: lookup Asaas",
+            );
+        }
+
+        // 6. Monta mensagem (incluindo link de pagamento se cobrança disponível)
         const mensagem = montarMensagem({
             nome: user.name || user.email?.split("@")[0],
             plano: mapaPlano(sub?.plan_type),
             vencimento: sub?.current_period_end || null,
             diasAtraso: diasEntre(sub?.current_period_end),
             mensagemExtra: mensagem_extra,
+            cobrancaAsaas,
         });
 
         // 7. Envia via Evolution
@@ -198,6 +259,15 @@ export async function handleApiCobrarAssinante(req, res) {
             destinatario: user.phone,
             assinante: user.name || user.email,
             status_assinatura: sub?.status || null,
+            cobranca_asaas: cobrancaAsaas
+                ? {
+                      id: cobrancaAsaas.id,
+                      valor: cobrancaAsaas.value,
+                      vencimento: cobrancaAsaas.dueDate,
+                      status: cobrancaAsaas.status,
+                      tem_link: !!cobrancaAsaas.invoiceUrl,
+                  }
+                : null,
         });
     } catch (err) {
         logger.error(
