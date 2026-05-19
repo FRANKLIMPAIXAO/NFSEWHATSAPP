@@ -9,6 +9,7 @@ import { handleWebhook } from "./handlers/webhook.js";
 import { handleFocusWebhook } from "./handlers/focus-webhook.js";
 import { handleApiEmit } from "./handlers/api-emit.js";
 import { handleApiCobrar } from "./handlers/api-cobrar.js";
+import { handleApiCobrarAssinante } from "./handlers/api-cobrar-assinante.js";
 import { logger } from "./utils/logger.js";
 import { restoreCertsFromEnv } from "./utils/restore-certs.js";
 
@@ -126,6 +127,14 @@ app.post("/api/emit", async (req, res) => {
 app.post("/api/cobrar", async (req, res) => {
     aplicarCorsApi(req, res);
     await handleApiCobrar(req, res);
+});
+
+// API HTTP — cobrança ADMIN pra assinante inadimplente. Mensagem vai
+// direto pro WhatsApp do user (poupeja_users.phone), não pro próprio admin.
+// Requer role='admin' em user_roles.
+app.post("/api/cobrar-assinante", async (req, res) => {
+    aplicarCorsApi(req, res);
+    await handleApiCobrarAssinante(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
