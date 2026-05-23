@@ -236,34 +236,26 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
 
     const dataEmissao = agoraBrtIso();
 
-    // codigo_tributacao_municipal_iss: padrão próprio do município.
-    // Aparecida nota #267 usa 7 dígitos (cTribMun "6920601" = CNAE da
-    // prefeitura). Aceita string até 7 dígitos.
-    const codTribMunicipal = formatarCodTribMunNacional(
+    // codigo_tributacao_municipal_iss: XSD Nacional rev. 17/03/2026 exige
+    // EXATAMENTE 3 dígitos (pattern `[0-9]{3}`). Probe Focus em 20/05/2026:
+    //   "33:0: ERROR: cTribMun: '6920601' is not accepted by pattern '[0-9]{3}'."
+    // Aparecida histórica usa CNAE (7 dígitos) que NÃO bate. Solução: omitir
+    // quando o cadastro tiver formato incompatível. Focus aceita ausência
+    // (campo "Não obrigatório" pela tabela de-para Focus).
+    const codTribMunicipalRaw = String(
         servico.codigo_tributario_municipio ||
             empresa.codigo_atividade_municipal ||
             ""
-    );
+    ).trim();
+    const codTribMunicipal = /^[0-9]{3}$/.test(codTribMunicipalRaw)
+        ? codTribMunicipalRaw
+        : undefined;
 
-    // XSD da SEFAZ exige ordem: tpAmb → dhEmi → verAplic → serie → nDPS → dCompet
-    // → tpEmit → ... Sem dhEmi no payload, Focus gera XML sem ele e o XSD reclama
-    // "verAplic not expected, expected dhEmi" (erro real recebido em 20/05/2026).
-    //
-    // Como a doc Focus NÃO documenta os nomes JSON dos campos NFSe Nacional,
-    // usamos shotgun: mandar todos os candidatos plausíveis. Focus usa o que
-    // reconhece e ignora o resto. Identificado o vencedor, deixamos só ele.
+    // Mapeamento Focus NFSe Nacional confirmado em 20/05/2026 via probe:
+    //   data_emissao → dhEmi (Focus reconhece esse nome, mesmo que a tabela
+    //   de-para tenha coluna B vazia — significa "mesmo nome").
     const payload = {
-        // === DPS — data, série, número, competência ===
         data_emissao: dataEmissao,
-        data_hora_emissao: dataEmissao,
-        dh_emissao: dataEmissao,
-        dh_emi: dataEmissao,
-        dhEmi: dataEmissao,
-        // verAplic é obrigatório no XSD (1-20 chars). Focus deve adicionar default
-        // ("FocusNFe"), mas mandamos pra garantir e pra ficar identificável no XML.
-        versao_aplicativo: "PacNoBolso v1",
-        ver_aplic: "PacNoBolso v1",
-        verAplic: "PacNoBolso v1",
         serie_dps: 1,
         numero_dps: numeroDps,
         data_competencia: competencia,
@@ -310,6 +302,22 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         payload.cpf_tomador = tomador.documento;
     }
     payload.razao_social_tomador = tomador.razao_social;
+
+    // Endereço do tomador — obrigatório quando cIndOp indica que o ISSQN
+    // incide no local do estabelecimento/domicílio do tomador (E0234).
+    // Pra Aparecida com cIndOp=100301, é mandatório. Mapeia o objeto
+    // `tomador.endereco` que vem do frontend pros nomes Focus snake_case.
+    const e = tomador.endereco || {};
+    if (e.logradouro) payload.logradouro_tomador = e.logradouro;
+    if (e.numero) payload.numero_tomador = e.numero;
+    if (e.complemento) payload.complemento_tomador = e.complemento;
+    if (e.bairro) payload.bairro_tomador = e.bairro;
+    if (e.cep) payload.cep_tomador = String(e.cep).replace(/\D/g, "");
+    const cMunTomador = e.codigo_municipio || e.ibge || e.cMun;
+    if (cMunTomador) payload.codigo_municipio_tomador = Number(cMunTomador);
+    if (e.uf) payload.uf_tomador = e.uf;
+    if (tomador.email) payload.email_tomador = tomador.email;
+    if (tomador.telefone) payload.telefone_tomador = String(tomador.telefone).replace(/\D/g, "");
 
     return payload;
 }
