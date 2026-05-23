@@ -245,8 +245,25 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
             ""
     );
 
+    // XSD da SEFAZ exige ordem: tpAmb → dhEmi → verAplic → serie → nDPS → dCompet
+    // → tpEmit → ... Sem dhEmi no payload, Focus gera XML sem ele e o XSD reclama
+    // "verAplic not expected, expected dhEmi" (erro real recebido em 20/05/2026).
+    //
+    // Como a doc Focus NÃO documenta os nomes JSON dos campos NFSe Nacional,
+    // usamos shotgun: mandar todos os candidatos plausíveis. Focus usa o que
+    // reconhece e ignora o resto. Identificado o vencedor, deixamos só ele.
     const payload = {
+        // === DPS — data, série, número, competência ===
         data_emissao: dataEmissao,
+        data_hora_emissao: dataEmissao,
+        dh_emissao: dataEmissao,
+        dh_emi: dataEmissao,
+        dhEmi: dataEmissao,
+        // verAplic é obrigatório no XSD (1-20 chars). Focus deve adicionar default
+        // ("FocusNFe"), mas mandamos pra garantir e pra ficar identificável no XML.
+        versao_aplicativo: "PacNoBolso v1",
+        ver_aplic: "PacNoBolso v1",
+        verAplic: "PacNoBolso v1",
         serie_dps: 1,
         numero_dps: numeroDps,
         data_competencia: competencia,
