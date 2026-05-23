@@ -151,6 +151,10 @@ export function supabaseRowToEmpresa(row) {
         focus_token,
         codigo_tributacao_nacional: row.codigo_servico_nacional,
         cnae: row.cnae, // obrigatório pra Goiânia (e outros municípios ABRASF)
+        // Contador RPS — Aparecida exige sequencial (E090). Incrementado pelo agent
+        // após cada emissão bem-sucedida.
+        proximo_numero_rps: row.proximo_numero_rps || 1,
+        serie_rps_padrao: row.serie_rps || undefined,
         // Código de atividade econômica cadastrado na prefeitura (Goiânia
         // exige no <cTribMun>). Sem isso, fallback pro LC 116 6 dígitos
         // (provavelmente rejeitado pelo XSD municipal).

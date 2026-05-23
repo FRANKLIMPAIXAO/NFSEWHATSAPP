@@ -184,20 +184,17 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
     );
 
     // Número e série do RPS:
-    // - E093 da Prefeitura Aparecida limita número a 5 dígitos. Goiânia aceita
-    //   timestamp completo. Discriminamos por município.
-    // - Série: cada empresa tem sua série cadastrada na Prefeitura. PAC usa
-    //   "70007" (confirmado XML 267). Sem cadastro específico, fallback "1".
+    // - Aparecida (5201405) exige sequencial (E090) e máx 5 dígitos (E093).
+    //   Lê empresa.proximo_numero_rps do Supabase. Após emissão bem-sucedida,
+    //   o emissor.js incrementa via UPDATE.
+    // - Goiânia (e demais ABRASF clássicos) ainda aceita timestamp longo.
+    // - Série RPS: lê de empresa.serie_rps_padrao (coluna serie_rps). Default "1".
     const munNumRps = Number(empresa.municipio_codigo);
     const numeroRps =
         munNumRps === 5201405
-            ? (Math.floor(Date.now() / 1000) % 99999) + 1 // Aparecida: 1..99999
+            ? Number(empresa.proximo_numero_rps) || 1
             : Math.floor(Date.now() / 1000); // Goiânia e demais
-    // empresa.serie_rps_padrao (futuro): coluna nova. Por enquanto hardcoded
-    // pra Aparecida = "70007" (única empresa autorizada lá hoje, PAC).
-    const serieRps =
-        empresa.serie_rps_padrao ||
-        (munNumRps === 5201405 ? "70007" : "1");
+    const serieRps = empresa.serie_rps_padrao || "1";
 
     const tomadorEndereco = tomador.endereco || {};
     const temEnderecoReal = !!(

@@ -314,6 +314,25 @@ export async function emitirNFSe({
             response: result,
             erro: result.erros?.[0]?.mensagem,
         });
+
+        // Incrementa contador RPS quando emissão é aceita pela Prefeitura
+        // (autorizado OU pendente). Pra Aparecida, número RPS DEVE ser
+        // sequencial — se não incrementar, próxima emissão dá E090.
+        // Best-effort: falha de update não interrompe o fluxo.
+        if (focusStatus === "autorizado" || focusStatus === "pendente") {
+            try {
+                const { incrementarProximoNumeroRps } = await import(
+                    "../db/supabase-repo.js"
+                );
+                await incrementarProximoNumeroRps(empresa._supabaseId);
+            } catch (incErr) {
+                logger.warn(
+                    { err: incErr.message, empresaId: empresa._supabaseId },
+                    "emitirNFSe: falha ao incrementar proximo_numero_rps"
+                );
+            }
+        }
+
         return {
             ok: focusStatus === "autorizado",
             notaId,

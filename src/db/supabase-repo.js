@@ -76,3 +76,51 @@ export async function findEmitenteByIdAndUser(empresaId, userId) {
     }
     return data;
 }
+
+/**
+ * Incrementa o contador proximo_numero_rps da empresa após emissão bem-sucedida.
+ * Crítico pra municípios ABRASF (Aparecida) que exigem RPS sequencial — sem
+ * isso, próxima emissão dá E090 "Número RPS inválido".
+ *
+ * Faz lookup + update separados (não atômico). Em alta concorrência pode dar
+ * race, mas pro nicho (1 emissão por vez por empresa via WhatsApp/painel)
+ * é aceitável. Pra atomicidade real, criar RPC `proximo_rps(empresa_id)`.
+ */
+export async function incrementarProximoNumeroRps(empresaId) {
+    if (!isEnabled()) return null;
+    if (!empresaId) return null;
+
+    const { data: row, error: readErr } = await supabase
+        .from("poupeja_fiscal_emitentes")
+        .select("proximo_numero_rps")
+        .eq("id", empresaId)
+        .maybeSingle();
+
+    if (readErr || !row) {
+        logger.warn(
+            { err: readErr?.message, empresaId },
+            "supabase-repo: não encontrei empresa pra incrementar RPS"
+        );
+        return null;
+    }
+
+    const proximo = (Number(row.proximo_numero_rps) || 0) + 1;
+    const { error: updateErr } = await supabase
+        .from("poupeja_fiscal_emitentes")
+        .update({ proximo_numero_rps: proximo })
+        .eq("id", empresaId);
+
+    if (updateErr) {
+        logger.warn(
+            { err: updateErr.message, empresaId, proximo },
+            "supabase-repo: falha ao atualizar proximo_numero_rps"
+        );
+        return null;
+    }
+
+    logger.info(
+        { empresaId, proximo },
+        "supabase-repo: proximo_numero_rps incrementado"
+    );
+    return proximo;
+}
