@@ -268,8 +268,19 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         )
     );
 
-    // Numero DPS único 1..999999999999999. Timestamp em segundos.
-    const numeroDps = Math.floor(Date.now() / 1000);
+    // Numero DPS — Aparecida ISSNET v7.5.3.0 exige sequencial (E090) e máx 5 dígitos
+    // (E093). Lê contador local empresa.proximo_numero_rps, sincronizado com o
+    // cadastro da Prefeitura via painel Focus + Supabase.
+    // Outros municípios Nacional (ainda no SEFIN nacional puro): timestamp longo OK.
+    const munNumDps = Number(empresa.municipio_codigo);
+    const numeroDps =
+        munNumDps === 5201405
+            ? Number(empresa.proximo_numero_rps) || 1
+            : Math.floor(Date.now() / 1000);
+
+    // serie_dps — Aparecida tem série específica cadastrada (PAC = 70007).
+    // empresa.serie_rps_padrao vem da coluna Supabase serie_rps. Default 1.
+    const serieDps = Number(empresa.serie_rps_padrao) || 1;
 
     const dataEmissao = agoraBrtIso();
 
@@ -293,7 +304,7 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
     //   de-para tenha coluna B vazia — significa "mesmo nome").
     const payload = {
         data_emissao: dataEmissao,
-        serie_dps: 1,
+        serie_dps: serieDps,
         numero_dps: numeroDps,
         data_competencia: competencia,
         emitente_dps: "1", // Prestador
