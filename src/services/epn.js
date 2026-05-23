@@ -175,7 +175,11 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                           }),
                     exigibilidadeISS: 1, // 1 = ISS exigível (default pra serviço comum)
                 },
-                federal: { cstPisCofins: "00" },
+                // PIS/COFINS CST:
+                //   "00" = operação tributável regime normal (Lucro Real/Presumido)
+                //   "08" = operação isenta — Simples Nacional optante
+                // Confirmado em XML real autorizado nº 267 da PAC (Simples, Aparecida).
+                federal: { cstPisCofins: optante ? "08" : "00" },
                 percentualTotalTributosFederais: 0,
                 percentualTotalTributosEstaduais: 0,
                 percentualTotalTributosMunicipais: Number(empresa.aliquota_iss) || 0,
@@ -187,9 +191,15 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
             // empresa (depende do tipo de serviço). Default 030101 (Inc. III,
             // demais serviços, estabelecimento do fornecedor) — funciona pra
             // serviços comuns como consultoria, mas manutenção exige 050101.
-            // CST 000 = Tributação Integral pelo IBS e CBS.
-            // cClassTrib 000001 = "Situações tributadas integralmente pelo IBS e CBS" — único
-            // código válido pra CST 000 em serviço comum (Informe Técnico RT 2025.002).
+            //
+            // CST e cClassTrib dependem do REGIME do prestador:
+            //   Regime normal     → CST="000" (Tributação Integral), cClassTrib="000001"
+            //                       ("Situações tributadas integralmente pelo IBS e CBS")
+            //   Simples Nacional  → CST="200" (Imune/isento), cClassTrib="200052"
+            //                       ("Operação tributada pelo Simples Nacional sem permissão de crédito")
+            //
+            // Confirmado em XML real autorizado nº 267 da PAC (Simples, Aparecida,
+            // contabilidade): CST=200, cClassTrib=200052, cIndOp=100301.
             // SEFAZ valida o par (CST, cClassTrib) e retorna E0959 se incompatível.
             ibsCbs: {
                 finNFSe: "0",
@@ -199,8 +209,8 @@ export async function emitirEpn({ empresa, tomador, servico, competencia }) {
                 valores: {
                     trib: {
                         gIBSCBS: {
-                            CST: "000",
-                            cClassTrib: "000001",
+                            CST: optante ? "200" : "000",
+                            cClassTrib: optante ? "200052" : "000001",
                         },
                     },
                 },
