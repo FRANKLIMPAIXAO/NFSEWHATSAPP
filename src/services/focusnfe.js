@@ -3,10 +3,15 @@
  * Cliente da API Focus NFe — emissão e consulta de NFS-e.
  *
  * Suporta dois padrões:
- *   - NFS-e Municipal (ABRASF, ISSNet, etc) — endpoint /v2/nfse  (payload aninhado)
- *   - NFS-e Nacional (padrão unificado CGSN/União) — endpoint /v2/nfsen (payload flat, DPS)
+ *   - NFS-e Municipal (ABRASF, ISSNet, etc)        — endpoint /v2/nfse           (payload aninhado)
+ *   - NFS-e Nacional (LC 214/2025, Reforma)        — endpoint /v2/nfse-nacional  (payload flat, DPS)
  *
  * Escolhe baseado em empresa.usa_nfse_nacional ou env FOCUS_NFE_PADRAO=nacional|municipal.
+ *
+ * Doc oficial: https://focusnfe.com.br/doc/#nfse-nacional
+ * NOTA: até mai/2026 esse cliente usava "/v2/nfsen" — o nome correto na API Focus
+ * em produção é "/v2/nfse-nacional" (com hífen). Confirmado em 20/05/2026 pela
+ * tabela de URLs da doc oficial.
  */
 import { logger } from "../utils/logger.js";
 
@@ -33,7 +38,7 @@ function resolverPadrao(empresa) {
 }
 
 function basePathPara(padrao) {
-    return padrao === "nacional" ? "/v2/nfsen" : "/v2/nfse";
+    return padrao === "nacional" ? "/v2/nfse-nacional" : "/v2/nfse";
 }
 
 // NFS-e NACIONAL (Aparecida, EPN) — cServTribNac da Tabela CGSN, 6 dígitos puros.
