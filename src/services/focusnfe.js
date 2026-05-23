@@ -52,30 +52,27 @@ function codigoCGSN6Digitos(codigo) {
     return d.padEnd(6, "0").slice(0, 6);
 }
 
-// ABRASF v2.04 — ItemListaServico tem 2 formatos vivos em 2026:
-//   - Goiânia (5208707, ABRASF clássico): decimal "XX.XX" (LC 116)
-//     Comprovado: Roca #11 ("14.01"), HC #15 ("17.01"), Centro Oeste #96 ("11.04").
-//   - Aparecida (5201405, ABRASF Nacional-compatible): 6 dígitos "IIIISSDD"
-//     (cServTribNac da Tabela CGSN). Confirmado em 23/05/2026: Focus retorna
-//     "Item Lista Serviço com valor inválido. O código é composto por 6 dígitos
-//     numéricos, sendo: 2 para Item (LC 116/2003), 2 para Subitem (LC 116/2003)
-//     e 2 para Desdobro Nacional."
+// ABRASF v2.04 — ItemListaServico formato varia por município:
+//   - Goiânia (5208707): "XX.XX" decimal (Roca "14.01", HC "17.01", Centro Oeste "11.04")
+//   - Aparecida (5201405): "XXXX" 4 dígitos SEM ponto. Confirmado pela doc oficial
+//     Focus NFe pra Aparecida (23/05/2026): exemplo "item_lista_servico": "0602"
+//     https://focusnfe.com.br/guias/nfse/municipios-integrados/aparecida-de-goiania/
 function formatarItemABRASF(codigo, codigoMunicipio) {
-    const d = String(codigo || "").replace(/\D/g, "");
-    // Aparecida e outros municípios que migraram pro código CGSN 6 dígitos
+    const d = String(codigo || "").replace(/\D/g, "").slice(0, 4);
+    if (d.length < 3) return d;
     const munNum = Number(codigoMunicipio);
     if (munNum === 5201405) {
-        return d.padEnd(6, "0").slice(0, 6);
+        // Aparecida — sem ponto, 4 dígitos puros ("1719" pra contabilidade)
+        return d.padEnd(4, "0");
     }
-    // Goiânia e demais ABRASF clássicos — formato XX.XX
-    const d4 = d.slice(0, 4);
-    if (d4.length < 3) return d4;
-    return d4.slice(0, 2) + "." + d4.slice(2).padEnd(2, "0");
+    // Goiânia e demais ABRASF clássicos — formato decimal XX.XX
+    return d.slice(0, 2) + "." + d.slice(2).padEnd(2, "0");
 }
 
-// ABRASF v2.04 — CodigoTributacaoMunicipio também varia por município:
+// ABRASF v2.04 — CodigoTributacaoMunicipio:
 //   - Goiânia: 4 dígitos sem ponto (Roca "1401", HC "1701", Centro Oeste "1104")
-//   - Aparecida: 7 dígitos (= CNAE, confirmado XML 266 da PAC: "6920601")
+//   - Aparecida: 7 dígitos (= CNAE). Doc Focus oficial: "codigo_tributario_municipio":
+//     "9602502" (= CNAE 9602502 cabeleireiro). Pra PAC contabilidade = "6920601".
 function formatarCodTribMunABRASF(codigo, codigoMunicipio) {
     const d = String(codigo || "").replace(/\D/g, "");
     const munNum = Number(codigoMunicipio);
