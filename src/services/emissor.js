@@ -370,9 +370,15 @@ export async function emitirNFSe({
             try {
                 const parsed = JSON.parse(sefazBody);
                 if (Array.isArray(parsed.erros) && parsed.erros.length) {
+                    // Formato com array de erros (Codigo/Descricao OU codigo/mensagem)
                     msgSefaz = parsed.erros
-                        .map((e) => `${e.Codigo}: ${e.Descricao}`)
+                        .map((e) =>
+                            `${e.Codigo || e.codigo || "?"}: ${e.Descricao || e.mensagem || JSON.stringify(e)}`
+                        )
                         .join("; ");
+                } else if (parsed.codigo || parsed.mensagem) {
+                    // Formato Focus padrão: { codigo, mensagem }
+                    msgSefaz = `${parsed.codigo || "?"}: ${parsed.mensagem || err.message}`;
                 }
             } catch {
                 // sefazBody pode não ser JSON em casos raros
@@ -384,6 +390,7 @@ export async function emitirNFSe({
                 emissor,
                 status: "rejeitado",
                 erro: msgSefaz,
+                response: { error: msgSefaz, body: sefazBody, statusCode: err.statusCode || err.status },
             };
         }
         throw err;

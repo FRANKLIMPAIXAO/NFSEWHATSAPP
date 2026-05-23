@@ -122,7 +122,13 @@ async function focusFetch(method, path, token, body) {
             `Focus ${response.status}: ${data.mensagem || data.erros?.[0]?.mensagem || text}`
         );
         err.status = response.status;
+        err.statusCode = response.status; // alias usado pelo catch do emissor.js
         err.data = data;
+        // err.body é a string raw esperada pelo catch do emissor.js pra
+        // detectar "isso veio da SEFAZ, não devo re-throw como erro técnico".
+        // Sem isso, qualquer 4xx vira HTTP 500 no api-emit, e o frontend
+        // ativa o fallback errado (Edge Function direto pra Nacional).
+        err.body = text;
         throw err;
     }
 
