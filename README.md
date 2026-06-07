@@ -1,18 +1,46 @@
 # Agent NFS-e — PAC
 
-Agente WhatsApp pra emissão de NFS-e via áudio. Cliente manda áudio, o agente emite a nota e devolve o PDF.
+Agente WhatsApp **multi-intenção** do PacNoBolso. Cliente fala uma coisa só
+(texto, áudio, foto ou PDF) e o agente roteia pra ação certa: emitir nota,
+registrar movimento financeiro, consultar/criar lembrete da agenda, ou
+tirar dúvida.
 
 ---
 
 ## Arquitetura
 
 ```
-WhatsApp (cliente) → Evolution API → Webhook Node.js → [Whisper → Claude → Focus NFe] → PDF de volta
+WhatsApp (cliente) → Evolution API → Webhook Node.js
                                           ↓
-                                   SQLite (estado + audit)
+                                    Identifica empresa (Supabase + SQLite)
+                                          ↓
+                          ┌───── classificarIntencao (Claude) ─────┐
+                          ↓             ↓             ↓             ↓
+                    emitir_nfse   registrar_   consultar_    duvida_geral
+                          ↓       financeiro    agenda            ↓
+                    Extractor +      ↓             ↓        Mensagem
+                    Focus NFe   (proxy n8n   handleAgenda    de ajuda
+                          ↓     na Semana 2)  (Supabase
+                       PDF/XML      ↓         poupeja_       ↓
+                          ↓     [TODO]        compromissos)  resposta
+                       resposta                    ↓
+                                              resposta
 ```
 
-**Stack:** Node.js 20 · Express · better-sqlite3 · Anthropic SDK · OpenAI Whisper · Focus NFe · Evolution API (Docker)
+**Stack:** Node.js 20 · Express · better-sqlite3 · Anthropic SDK
+(extractor + classificador + agenda) · OpenAI Whisper · Focus NFe ·
+Evolution API · Supabase (RLS por user_id)
+
+### Robustez
+
+- Webhook responde 200 imediato (Evolution não fica esperando).
+- `handleWebhook` tem `try/catch` global — se qualquer erro vazar do miolo,
+  o cliente recebe mensagem amigável em vez de ficar no vácuo.
+- Classificador com **threshold de confiança** (≥0.6): abaixo disso vira
+  `duvida_geral` em vez de chutar e mandar pro handler errado.
+- Conversa em andamento (NFSe parcial aguardando confirmação ou dados)
+  **não passa pelo classificador** — continua direto pro extractor pra
+  não quebrar fluxo de várias mensagens.
 
 ---
 
@@ -21,27 +49,27 @@ WhatsApp (cliente) → Evolution API → Webhook Node.js → [Whisper → Claude
 ```
 agent-nfse/
 ├── src/
-│   ├── server.js              # Express + webhook
+│   ├── server.js                # Express + webhook (responde 200 imediato)
 │   ├── handlers/
-│   │   └── webhook.js         # Orquestrador principal (fluxo completo)
+│   │   ├── webhook.js           # Orquestrador (identifica → classifica → roteia)
+│   │   └── agenda.js            # NOVO — CRUD de compromissos via WhatsApp
 │   ├── services/
-│   │   ├── whisper.js         # Áudio → texto
-│   │   ├── extractor.js       # Texto → JSON (Claude)
-│   │   ├── focusnfe.js        # Emissão NFS-e
-│   │   └── whatsapp.js        # Envio de mensagens/PDFs
+│   │   ├── whisper.js           # Áudio → texto
+│   │   ├── extractor.js         # Texto → JSON NFSe (Claude)
+│   │   ├── classificador.js     # NOVO — roteador de intenção (Claude)
+│   │   ├── focusnfe.js          # Emissão NFS-e
+│   │   └── whatsapp.js          # Envio de mensagens/PDFs
 │   ├── prompts/
-│   │   └── extractor.js       # System prompt do Claude
+│   │   ├── extractor.js         # System prompt do extrator NFSe
+│   │   └── classificador.js     # NOVO — system prompt do classificador
 │   ├── db/
-│   │   ├── index.js           # Conexão + queries
-│   │   └── schema.sql         # Schema das tabelas
+│   │   ├── index.js             # Conexão + queries
+│   │   ├── empresa-adapter.js   # Supabase row → empresa (inclui _supabaseUserId)
+│   │   └── schema.sql           # Schema das tabelas
 │   └── utils/
-│       └── logger.js          # Pino
-├── scripts/
-│   ├── init-db.js             # Inicializa o banco
-│   ├── add-empresa.js         # Cadastra cliente PAC
-│   ├── test-extractor.js      # Testa extrator isolado
-│   └── setup-vps.sh           # Setup completo da VPS
-├── .env.example               # Template de variáveis
+│       └── logger.js            # Pino
+├── scripts/                     # init-db, add-empresa, test-extractor, setup-vps
+├── .env.example                 # Template (ANTHROPIC_MODEL_CLASSIFICADOR opcional)
 ├── package.json
 └── README.md
 ```

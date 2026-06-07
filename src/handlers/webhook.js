@@ -35,6 +35,7 @@ import { findEmitenteByWhatsapp } from "../db/supabase-repo.js";
 import { supabaseRowToEmpresa } from "../db/empresa-adapter.js";
 import { transcrever } from "../services/whisper.js";
 import { extrairCampos } from "../services/extractor.js";
+import { classificarIntencao } from "../services/classificador.js";
 import { emitirNFSe } from "../services/emissor.js";
 import {
     enviarTexto,
@@ -42,6 +43,7 @@ import {
     baixarAudio,
     baixarMidia,
 } from "../services/whatsapp.js";
+import { handleAgenda } from "./agenda.js";
 import { formatarResumoCliente } from "../utils/resumo.js";
 import { logger } from "../utils/logger.js";
 
@@ -53,10 +55,41 @@ const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP;
 const CANCELAR_REGEX = /^(cancelar|cancela|cancelo|desistir|desisto|parar|para)\b\.?\s*$/i;
 
 /**
- * Entrada principal.
+ * Entrada principal — wrapper com fallback global.
+ * Se qualquer erro inesperado vazar do miolo, tentamos avisar o cliente
+ * em vez de deixar ele esperando indefinidamente.
+ *
  * @param {Object} evt - payload do webhook Evolution
  */
 export async function handleWebhook(evt) {
+    try {
+        await _handleWebhookInner(evt);
+    } catch (err) {
+        logger.error(
+            { err: err.message, stack: err.stack?.slice(0, 800) },
+            "webhook: erro não tratado no miolo — tentando avisar o cliente"
+        );
+        // Tenta extrair número pra mandar fallback amigável
+        const remoteJid = evt?.data?.key?.remoteJid || "";
+        if (remoteJid && !remoteJid.endsWith("@g.us") && !evt?.data?.key?.fromMe) {
+            const numero = remoteJid.replace(/@.*$/, "");
+            try {
+                await enviarTexto(
+                    numero,
+                    "❌ Tive um problema técnico aqui. Tenta de novo em 1 minuto, ou me manda 'oi' que eu reinicio nossa conversa."
+                );
+            } catch (sendErr) {
+                logger.error({ err: sendErr.message }, "webhook: falha enviando fallback ao cliente");
+            }
+        }
+    }
+}
+
+/**
+ * Miolo do webhook (separado do wrapper pra garantir fallback global em caso
+ * de erro não tratado).
+ */
+async function _handleWebhookInner(evt) {
     // Evolution manda evento no formato:
     // { event: "messages.upsert", data: { key, message, messageType, ... } }
     if (evt.event !== "messages.upsert") return;
@@ -271,6 +304,73 @@ export async function handleWebhook(evt) {
         textoExtracao = texto;
     } else {
         return; // tipo de mensagem que não interessa
+    }
+
+    // ---------- 4.5 CLASSIFICAR INTENÇÃO ----------
+    // Só roda quando NÃO TEM conversa em andamento. Se já tem conversa
+    // (aguardando_confirmacao ou aguardando_dados), assumimos que o usuário
+    // está continuando o fluxo de NFSe que já estava aberto — sem classificar
+    // de novo (evita router mandar a próxima mensagem pra outro handler e
+    // quebrar a conversa).
+    if (!conversaAtiva) {
+        const inputClass =
+            imagensExtracao.length || pdfExtracao
+                ? { texto: textoExtracao, imagens: imagensExtracao, pdf: pdfExtracao }
+                : textoExtracao;
+        const intencao = await classificarIntencao(inputClass);
+        logEvento("intencao_classificada", empresa.id, null, {
+            intencao: intencao.intencao,
+            subtipo: intencao.subtipo,
+            confianca: intencao.confianca,
+            motivo: intencao.motivo,
+            latenciaMs: intencao.latenciaMs,
+        });
+
+        // ROTEAMENTO POR INTENÇÃO
+        if (intencao.intencao === "consultar_agenda") {
+            await handleAgenda({ empresa, numero, texto: textoExtracao });
+            // Cleanup arquivos temp (mídia visual)
+            for (const p of arquivosTemp) {
+                await fs.unlink(p).catch(() => {});
+            }
+            return;
+        }
+
+        if (intencao.intencao === "registrar_financeiro") {
+            // FASE 1 — só avisamos que recebemos. Handler de proxy pro n8n vem
+            // na Semana 2 (precisa da URL do webhook n8n). Por enquanto
+            // mensagem placeholder pra não deixar o cliente sem resposta.
+            await enviarTexto(
+                numero,
+                "💰 Recebi! Estou terminando de plugar essa parte de financeiro " +
+                "(boletos, pagamentos, extratos) por aqui. Em alguns dias já tá " +
+                "rodando. Por enquanto, manda boletos no número antigo se ainda " +
+                "estiver usando."
+            );
+            for (const p of arquivosTemp) {
+                await fs.unlink(p).catch(() => {});
+            }
+            return;
+        }
+
+        if (intencao.intencao === "duvida_geral") {
+            // Mensagem de ajuda / saudação
+            await enviarTexto(
+                numero,
+                "Oi! 👋 Posso te ajudar com:\n\n" +
+                "📄 *Emitir nota fiscal (NFS-e)* — me manda áudio, foto do " +
+                "orçamento, ou descreva o serviço e o cliente.\n\n" +
+                "📅 *Sua agenda* — \"o que tenho hoje\", \"lembra do aluguel " +
+                "dia 5\", \"quando vence meu certificado\".\n\n" +
+                "Manda aí o que precisa."
+            );
+            for (const p of arquivosTemp) {
+                await fs.unlink(p).catch(() => {});
+            }
+            return;
+        }
+
+        // intencao === "emitir_nfse" — continua pro extractor (fluxo legado)
     }
 
     // ---------- 5. EXTRAIR CAMPOS ----------
