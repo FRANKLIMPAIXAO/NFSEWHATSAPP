@@ -44,6 +44,7 @@ import {
     baixarMidia,
 } from "../services/whatsapp.js";
 import { handleAgenda } from "./agenda.js";
+import { handleFinanceiro } from "./financeiro.js";
 import { formatarResumoCliente } from "../utils/resumo.js";
 import { logger } from "../utils/logger.js";
 
@@ -337,16 +338,18 @@ async function _handleWebhookInner(evt) {
         }
 
         if (intencao.intencao === "registrar_financeiro") {
-            // FASE 1 — só avisamos que recebemos. Handler de proxy pro n8n vem
-            // na Semana 2 (precisa da URL do webhook n8n). Por enquanto
-            // mensagem placeholder pra não deixar o cliente sem resposta.
-            await enviarTexto(
+            // FASE 2 — proxy HTTP pro workflow "Conciliação Bancária WhatsApp"
+            // do n8n (via "PAC-NFSE → Conciliação (Proxy)" que republica em
+            // RabbitMQ Meu_App). O n8n responde direto ao cliente pela
+            // Evolution configurada — agent-nfse só encaminha.
+            await handleFinanceiro({
+                evt,
+                empresa,
                 numero,
-                "💰 Recebi! Estou terminando de plugar essa parte de financeiro " +
-                "(boletos, pagamentos, extratos) por aqui. Em alguns dias já tá " +
-                "rodando. Por enquanto, manda boletos no número antigo se ainda " +
-                "estiver usando."
-            );
+                texto: textoExtracao,
+                imagens: imagensExtracao,
+                pdf: pdfExtracao,
+            });
             for (const p of arquivosTemp) {
                 await fs.unlink(p).catch(() => {});
             }

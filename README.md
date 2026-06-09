@@ -19,12 +19,15 @@ WhatsApp (cliente) → Evolution API → Webhook Node.js
                     emitir_nfse   registrar_   consultar_    duvida_geral
                           ↓       financeiro    agenda            ↓
                     Extractor +      ↓             ↓        Mensagem
-                    Focus NFe   (proxy n8n   handleAgenda    de ajuda
-                          ↓     na Semana 2)  (Supabase
-                       PDF/XML      ↓         poupeja_       ↓
-                          ↓     [TODO]        compromissos)  resposta
-                       resposta                    ↓
-                                              resposta
+                    Focus NFe   handleFinanceiro handleAgenda  de ajuda
+                          ↓     (HTTP POST →    (Supabase          ↓
+                       PDF/XML  webhook n8n →   poupeja_       resposta
+                          ↓     RabbitMQ Meu_App) compromissos)
+                       resposta      ↓                ↓
+                              [n8n consome,       resposta
+                               processa,
+                               responde via
+                               Evolution]
 ```
 
 **Stack:** Node.js 20 · Express · better-sqlite3 · Anthropic SDK
@@ -52,7 +55,8 @@ agent-nfse/
 │   ├── server.js                # Express + webhook (responde 200 imediato)
 │   ├── handlers/
 │   │   ├── webhook.js           # Orquestrador (identifica → classifica → roteia)
-│   │   └── agenda.js            # NOVO — CRUD de compromissos via WhatsApp
+│   │   ├── agenda.js            # CRUD de compromissos via WhatsApp
+│   │   └── financeiro.js        # NOVO — proxy HTTP pro n8n (boleto/pix/extrato)
 │   ├── services/
 │   │   ├── whisper.js           # Áudio → texto
 │   │   ├── extractor.js         # Texto → JSON NFSe (Claude)
