@@ -70,10 +70,11 @@ const FALLBACK_ERRO_TECNICO =
  * @param {Object} args.empresa  - empresa identificada (do Supabase)
  * @param {string} args.numero   - whatsapp do user
  * @param {string} args.texto    - texto/transcrição (pode ser vazio)
- * @param {Array}  args.imagens  - [{base64, mimetype}] se houver
- * @param {Object} args.pdf      - {base64} se houver
+ * @param {Array}  args.imagens     - [{base64, mimetype}] se houver
+ * @param {Object} args.pdf         - {base64} se houver
+ * @param {string} args.audioBase64 - áudio em base64 (pra audioMessage)
  */
-export async function handleFinanceiro({ evt, empresa, numero, texto, imagens, pdf }) {
+export async function handleFinanceiro({ evt, empresa, numero, texto, imagens, pdf, audioBase64 }) {
     // Sem URL/secret configurado, fica no placeholder (não derruba o fluxo)
     if (!N8N_PROXY_URL || !N8N_PROXY_SECRET) {
         logger.warn(
@@ -90,10 +91,15 @@ export async function handleFinanceiro({ evt, empresa, numero, texto, imagens, p
     // A Evolution legada injeta a mídia em base64 dentro de data.message.base64
     // antes de publicar na queue. Como recebemos via webhook, a mídia chega só
     // como messageId — já fizemos download em webhook.js. Injetamos manualmente.
+    // O nó "Convert to File" do workflow "Conciliação Bancária WhatsApp" exige
+    // esse campo populado pra qualquer tipo de mídia (imagem, PDF ou áudio) —
+    // sem isso ele crasha com "first argument must be of type string... Received null".
     if (imagens && imagens.length > 0 && imagens[0]?.base64) {
         data.message = { ...(data.message || {}), base64: imagens[0].base64 };
     } else if (pdf?.base64) {
         data.message = { ...(data.message || {}), base64: pdf.base64 };
+    } else if (audioBase64) {
+        data.message = { ...(data.message || {}), base64: audioBase64 };
     }
 
     // Texto / transcrição: alguns workflows usam isso pra detectar intenção.

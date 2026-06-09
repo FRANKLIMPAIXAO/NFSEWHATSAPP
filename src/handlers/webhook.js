@@ -194,6 +194,10 @@ async function _handleWebhookInner(evt) {
     // Mídia visual coletada da mensagem (imagens e/ou PDF) pra extractor multimodal
     let imagensExtracao = [];
     let pdfExtracao = null;
+    // Áudio em base64 (usado pelo handler financeiro quando encaminha pro
+    // proxy n8n — o nó "Convert to File" do workflow Conciliação Bancária
+    // espera `data.message.base64` pra qualquer tipo de mídia).
+    let audioBase64Extracao = null;
     // Caminhos pra cleanup no final
     const arquivosTemp = [];
 
@@ -205,6 +209,11 @@ async function _handleWebhookInner(evt) {
             etapa = "baixar";
             const audioResult = await baixarAudio(messageId);
             audioPath = audioResult.path;
+            // Lê o áudio como base64 ANTES do unlink (no finally) — necessário
+            // pra encaminhar pro proxy n8n quando intenção for financeira.
+            etapa = "ler_base64";
+            const audioBytes = await fs.readFile(audioPath);
+            audioBase64Extracao = audioBytes.toString("base64");
             etapa = "transcrever";
             textoExtracao = await transcrever(audioPath);
             logEvento("audio_transcrito", empresa.id, conversaAtiva?.id, {
@@ -349,6 +358,7 @@ async function _handleWebhookInner(evt) {
                 texto: textoExtracao,
                 imagens: imagensExtracao,
                 pdf: pdfExtracao,
+                audioBase64: audioBase64Extracao,
             });
             for (const p of arquivosTemp) {
                 await fs.unlink(p).catch(() => {});
