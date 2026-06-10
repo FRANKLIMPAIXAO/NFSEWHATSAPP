@@ -17,9 +17,14 @@ import { CLASSIFICADOR_SYSTEM_PROMPT } from "../prompts/classificador.js";
 import { logger } from "../utils/logger.js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Default Haiku pra classificação — tarefa simples (escolher 1 de 4 categorias),
+// rodando em CADA mensagem que chega. Haiku traz ~1s vs ~5s do Sonnet, com
+// qualidade indistinguível pra esse caso (validado em prod 09/06/2026:
+// classificações de imagem/áudio/texto consistentemente 95-100% de confiança).
+// Pode overrride via env ANTHROPIC_MODEL_CLASSIFICADOR pra rodar com Sonnet
+// (mais caro mas mesmo resultado).
 const MODEL = process.env.ANTHROPIC_MODEL_CLASSIFICADOR
-    || process.env.ANTHROPIC_MODEL
-    || "claude-sonnet-4-5";
+    || "claude-haiku-4-5";
 
 // Categorias válidas (espelha o prompt)
 const INTENCOES_VALIDAS = new Set([

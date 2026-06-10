@@ -19,9 +19,10 @@ import { enviarTexto } from "../services/whatsapp.js";
 import { logger } from "../utils/logger.js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Default Haiku — sub-classificação simples (consulta vs criar vs concluir +
+// extração de campos básicos). Override via env ANTHROPIC_MODEL_AGENDA.
 const MODEL = process.env.ANTHROPIC_MODEL_AGENDA
-    || process.env.ANTHROPIC_MODEL
-    || "claude-sonnet-4-5";
+    || "claude-haiku-4-5";
 
 /**
  * System prompt do sub-classificador da agenda. Decide o tipo de operação e,
