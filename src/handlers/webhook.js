@@ -77,7 +77,7 @@ export async function handleWebhook(evt) {
             try {
                 await enviarTexto(
                     numero,
-                    "❌ Tive um problema técnico aqui. Tenta de novo em 1 minuto, ou me manda 'oi' que eu reinicio nossa conversa."
+                    "😬 Travei aqui agora. Tenta de novo em 1 minutinho, ou manda *\"oi\"* que eu reinicio nossa conversa."
                 );
             } catch (sendErr) {
                 logger.error({ err: sendErr.message }, "webhook: falha enviando fallback ao cliente");
@@ -161,7 +161,9 @@ async function _handleWebhookInner(evt) {
     if (!empresa) {
         await enviarTexto(
             numero,
-            "Olá! Este número não está cadastrado no agente PAC. Fale com a equipe pra ativar."
+            "👋 Oi! Esse número ainda não está cadastrado no PacNoBolso. " +
+            "Pra ativar, cadastra sua empresa em pacnobolso.com.br e cola esse mesmo WhatsApp lá no campo *\"WhatsApp do dono\"*. " +
+            "Em 2 minutos a gente conversa de novo."
         );
         return;
     }
@@ -177,13 +179,13 @@ async function _handleWebhookInner(evt) {
             finalizarConversa.run("cancelada", conversaAtiva.id);
             await enviarTexto(
                 numero,
-                "❌ Emissão cancelada. Quando quiser, manda áudio novo pra recomeçar."
+                "👍 Cancelei aqui. Quando quiser recomeçar, manda áudio, foto ou descreve o serviço por texto."
             );
             logEvento("conversa_cancelada_dono", empresa.id, conversaAtiva.id, {});
         } else {
             await enviarTexto(
                 numero,
-                "Não tem nenhuma emissão em andamento agora. Manda áudio quando quiser emitir."
+                "🤔 Sem emissão em andamento por aqui. Manda áudio, foto do orçamento ou descreve o serviço pra eu começar."
             );
         }
         return;
@@ -205,7 +207,7 @@ async function _handleWebhookInner(evt) {
         let audioPath = null;
         let etapa = "inicio";
         try {
-            await enviarTexto(numero, "🎙️ Recebi seu áudio. Transcrevendo...");
+            await enviarTexto(numero, "🎙️ Ouvindo seu áudio... me dá um instante.");
             etapa = "baixar";
             const audioResult = await baixarAudio(messageId);
             audioPath = audioResult.path;
@@ -231,7 +233,7 @@ async function _handleWebhookInner(evt) {
             });
             await enviarTexto(
                 numero,
-                `Ops, não consegui processar o áudio (etapa: ${etapa}). Pode mandar de novo ou descrever por texto?`
+                `😬 Travei no seu áudio (etapa: ${etapa}). Manda de novo ou descreve por texto que eu pego.`
             );
             return;
         } finally {
@@ -246,8 +248,8 @@ async function _handleWebhookInner(evt) {
         try {
             const aviso =
                 tipo === "imageMessage"
-                    ? "📷 Recebi a imagem. Analisando..."
-                    : "📄 Recebi o documento. Analisando...";
+                    ? "📷 Olhando sua imagem... me dá um instante."
+                    : "📄 Lendo seu documento... me dá um instante.";
             await enviarTexto(numero, aviso);
             etapa = "baixar";
             const midia = await baixarMidia(messageId);
@@ -281,7 +283,7 @@ async function _handleWebhookInner(evt) {
             });
             await enviarTexto(
                 numero,
-                `Ops, não consegui processar o arquivo (etapa: ${etapa}). Pode mandar de novo ou descrever por texto?`
+                `😬 Não consegui abrir esse arquivo (etapa: ${etapa}). Manda de novo ou descreve por texto que eu pego.`
             );
             return;
         }
@@ -367,15 +369,15 @@ async function _handleWebhookInner(evt) {
         }
 
         if (intencao.intencao === "duvida_geral") {
-            // Mensagem de ajuda / saudação
+            // Mensagem de ajuda / saudação — voz: secretário esperto, direto.
+            const nomeEmpresa = empresa.nome_fantasia || empresa.razao_social || empresa.nome || "chefe";
             await enviarTexto(
                 numero,
-                "Oi! 👋 Posso te ajudar com:\n\n" +
-                "📄 *Emitir nota fiscal (NFS-e)* — me manda áudio, foto do " +
-                "orçamento, ou descreva o serviço e o cliente.\n\n" +
-                "📅 *Sua agenda* — \"o que tenho hoje\", \"lembra do aluguel " +
-                "dia 5\", \"quando vence meu certificado\".\n\n" +
-                "Manda aí o que precisa."
+                `👋 Oi, ${nomeEmpresa}! Pra organizar a *${nomeEmpresa}*, eu cuido de 3 frentes:\n\n` +
+                `📄 *Nota fiscal* — manda áudio, foto do orçamento ou descreve o serviço que eu emito.\n` +
+                `📅 *Agenda* — *"o que tenho hoje"*, *"lembra do aluguel dia 5"*, *"já paguei o IPVA"*.\n` +
+                `💰 *Financeiro* — foto de boleto, pix recebido, extrato — eu registro tudo.\n\n` +
+                `Manda aí o que precisa. 🚀`
             );
             for (const p of arquivosTemp) {
                 await fs.unlink(p).catch(() => {});
@@ -407,7 +409,7 @@ async function _handleWebhookInner(evt) {
         });
         await enviarTexto(
             numero,
-            "Tive um problema interno aqui. Pode tentar de novo?"
+            "😬 Travei aqui agora. Tenta de novo em 1 minutinho que eu resolvo."
         );
         return;
     } finally {

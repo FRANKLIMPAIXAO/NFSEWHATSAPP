@@ -53,14 +53,11 @@ const PAC_EVO_INSTANCE = process.env.PAC_EVO_INSTANCE || "";
 
 // Mensagem amigável quando o proxy não tá configurado (fallback)
 const FALLBACK_PLACEHOLDER =
-    "💰 Recebi! Estou terminando de plugar essa parte de financeiro " +
-    "(boletos, pagamentos, extratos) por aqui. Em alguns dias já tá " +
-    "rodando. Por enquanto, manda boletos no número antigo se ainda " +
-    "estiver usando.";
+    "💰 Recebi! Tô terminando de plugar a parte de financeiro " +
+    "(boletos, pix, extrato) por aqui. Em poucos dias rola.";
 
 const FALLBACK_ERRO_TECNICO =
-    "💰 Recebi sua mensagem, mas tive um problema técnico aqui. " +
-    "Tenta de novo em 1 minuto?";
+    "😬 Travei processando seu financeiro. Tenta de novo em 1 minutinho.";
 
 /**
  * Encaminha a mensagem financeira pro proxy do n8n.

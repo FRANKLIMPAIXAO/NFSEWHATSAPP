@@ -41,7 +41,10 @@ A mensagem JÁ FOI CLASSIFICADA como "consultar_agenda" — agora você decide:
    - "reunião com João amanhã às 14h"
    - "preciso pagar IPVA dia 30"
    Quando criar, EXTRAIA os campos:
-   - titulo: nome curto ("Aluguel", "Reunião com João", "IPVA")
+   - titulo: nome curto COMEÇANDO com um emoji semântico relevante (ex:
+     "💸 Aluguel", "🦷 Dentista", "📞 Reunião com João", "🚗 IPVA",
+     "📄 DAS", "🛂 Renovar CNH", "🔐 Cert digital"). Escolha o emoji que
+     melhor representa visualmente. Apenas 1 emoji no início.
    - categoria: "pagamento" | "imposto" | "recebimento" | "vencimento_doc" | "reuniao" | "tarefa"
    - data_proxima: "YYYY-MM-DD" — calcule a partir do hoje
    - hora_proxima: "HH:MM" ou null se não tem horário
@@ -54,13 +57,19 @@ A mensagem JÁ FOI CLASSIFICADA como "consultar_agenda" — agora você decide:
    - "fechei a reunião com Maria"
    Você devolve um titulo aproximado pra eu achar o compromisso ativo.
 
+VOZ NA resposta_amigavel:
+   - Direto, brasileiro, sem floreio.
+   - Tom de secretário esperto que entende o negócio (não robô).
+   - Confirma a ação e dá próximo passo.
+   - 1-2 frases, no máximo 1 emoji extra (além do título).
+
 DEVOLVA APENAS o JSON:
 
 {
   "operacao": "consulta" | "criar" | "concluir",
   "filtro_consulta": "hoje" | "amanha" | "semana" | "mes" | "todos" | null,
   "compromisso": null OU {
-    "titulo": "...",
+    "titulo": "emoji + nome curto",
     "categoria": "...",
     "data_proxima": "YYYY-MM-DD",
     "hora_proxima": "HH:MM" | null,
@@ -69,7 +78,7 @@ DEVOLVA APENAS o JSON:
     "dia_recorrente": number | null
   },
   "titulo_aproximado": "string ou null (só pra concluir)",
-  "resposta_amigavel": "1-2 frases pro WhatsApp confirmando o que vai fazer"
+  "resposta_amigavel": "frase curta confirmando o que vai fazer"
 }`;
 
 /**
@@ -238,9 +247,11 @@ function calcularProximaData(dataAtual, recorrencia, diaRecorrente) {
 
 function formatarListaCompromissos(compromissos, filtro) {
     if (!compromissos.length) {
-        const filtroTxt = filtro === "hoje" ? "pra hoje" : filtro === "amanha" ? "pra amanhã"
-            : filtro === "semana" ? "pra essa semana" : filtro === "mes" ? "pra esse mês" : "ativo agora";
-        return `📅 Nada ${filtroTxt}. Tá tudo em dia!`;
+        if (filtro === "hoje") return "☀️ Tá tudo em dia, chefe. Hoje não tem nada. Aproveita.";
+        if (filtro === "amanha") return "📭 Amanhã tá livre. Folga merecida.";
+        if (filtro === "semana") return "🎯 Semana limpa por enquanto. Manda \"lembra de X\" se quiser anotar algo.";
+        if (filtro === "mes") return "📭 Mês ainda sem nada anotado. Manda \"lembra de X\" pra eu adicionar.";
+        return "🎯 Sem compromissos ativos no momento.";
     }
 
     const fmtData = (d) => {
@@ -254,9 +265,11 @@ function formatarListaCompromissos(compromissos, filtro) {
         return `• ${fmtData(c.data_proxima)}${hora} — ${c.titulo}${fmtValor(c.valor)}`;
     });
 
-    const titulo = filtro === "hoje" ? "🗓️ Hoje" : filtro === "amanha" ? "🗓️ Amanhã"
-        : filtro === "semana" ? "🗓️ Próximos 7 dias" : "🗓️ Sua agenda";
-    return `${titulo}:\n\n${linhas.join("\n")}`;
+    const titulo = filtro === "hoje" ? "📅 *Sua agenda de hoje*"
+        : filtro === "amanha" ? "📅 *Amanhã*"
+        : filtro === "semana" ? "📅 *Próximos 7 dias*"
+        : "📅 *Sua agenda*";
+    return `${titulo}\n\n${linhas.join("\n")}\n\n_Manda "já paguei X" quando concluir._`;
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -275,14 +288,14 @@ function formatarListaCompromissos(compromissos, filtro) {
 export async function handleAgenda({ empresa, numero, texto }) {
     if (!supabaseEnabled()) {
         await enviarTexto(numero,
-            "📅 A agenda ainda não está disponível por aqui. Em breve! Por enquanto, posso te ajudar com emissão de nota."
+            "📅 A agenda tá em manutenção por aqui. Volta em alguns minutos, ou manda áudio/foto se for emitir nota — isso eu já consigo."
         );
         return;
     }
 
     if (!texto || !texto.trim()) {
         await enviarTexto(numero,
-            "📅 Me diga o que quer fazer na agenda: ver compromissos, criar lembrete ou marcar como feito?"
+            "📅 Me fala o que precisa: *\"o que tenho hoje\"*, *\"lembra de pagar X dia Y\"* ou *\"já paguei o Z\"*."
         );
         return;
     }
@@ -293,7 +306,7 @@ export async function handleAgenda({ empresa, numero, texto }) {
     if (!userId) {
         logger.warn({ empresaId: empresa.id }, "agenda: empresa sem user_id Supabase");
         await enviarTexto(numero,
-            "📅 Sua empresa ainda não está totalmente configurada pra agenda. Acesse o painel pra ativar."
+            "📅 Tô vendo aqui que sua empresa precisa terminar o cadastro no painel pra eu ativar sua agenda. Acessa pacnobolso.com.br/fiscal e completa em 2 minutos."
         );
         return;
     }
@@ -315,11 +328,14 @@ export async function handleAgenda({ empresa, numero, texto }) {
                 op.compromisso
             );
             const dataFmt = new Date(criado.data_proxima + "T00:00:00")
-                .toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+                .toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+            const recorrenciaTxt =
+                criado.recorrencia === "mensal" ? " (todo mês)" :
+                criado.recorrencia === "semanal" ? " (toda semana)" :
+                criado.recorrencia === "anual" ? " (todo ano)" : "";
             await enviarTexto(numero,
-                `✅ Anotado: *${criado.titulo}* em ${dataFmt}` +
-                (criado.recorrencia !== "nenhuma" ? ` (repete ${criado.recorrencia})` : "") +
-                `. Vou te lembrar.`
+                `📝 Anotado! *${criado.titulo}* no dia ${dataFmt}${recorrenciaTxt}. ` +
+                `Te chamo aqui quando estiver chegando. 💪`
             );
             return;
         }
@@ -328,15 +344,20 @@ export async function handleAgenda({ empresa, numero, texto }) {
             const concluido = await concluirCompromisso(userId, op.titulo_aproximado);
             if (!concluido) {
                 await enviarTexto(numero,
-                    `🔍 Não achei nenhum compromisso ativo com "${op.titulo_aproximado}". Tenta de novo com outras palavras?`
+                    `🤔 Não achei "${op.titulo_aproximado}" na sua agenda ativa. Tenta com outras palavras, ou manda "minha agenda" pra ver o que tem cadastrado.`
                 );
             } else {
-                const sufixo = concluido.recorrencia !== "nenhuma"
-                    ? ` Já agendei o próximo pra ${concluido.recorrencia === "mensal" ? "o mês que vem" : "a próxima"}.`
-                    : "";
-                await enviarTexto(numero,
-                    `✅ Marquei *${concluido.titulo}* como feito.${sufixo}`
-                );
+                if (concluido.recorrencia !== "nenhuma") {
+                    const proximaFmt = new Date(concluido.data_proxima + "T00:00:00")
+                        .toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+                    await enviarTexto(numero,
+                        `✅ Boa! *${concluido.titulo}* feito. Já marquei o próximo pra ${proximaFmt}.`
+                    );
+                } else {
+                    await enviarTexto(numero,
+                        `✅ Pode descansar: *${concluido.titulo}* concluído. 🎯`
+                    );
+                }
             }
             return;
         }
@@ -344,12 +365,12 @@ export async function handleAgenda({ empresa, numero, texto }) {
         // Fallback: resposta amigável do sub-classificador
         await enviarTexto(numero,
             op.resposta_amigavel ||
-            "📅 Não entendi sua solicitação de agenda. Pode reformular?"
+            `🤔 Não peguei o que você quer fazer. Manda algo tipo *"o que tenho hoje"*, *"lembra de pagar X dia 5"* ou *"já paguei X"*.`
         );
     } catch (err) {
         logger.error({ err: err.message, op }, "agenda: erro processando operação");
         await enviarTexto(numero,
-            "📅 Tive um problema técnico com sua agenda. Tenta de novo em 1 minuto?"
+            "😬 Travei aqui agora. Tenta de novo em 1 minutinho que eu resolvo."
         );
     }
 }
