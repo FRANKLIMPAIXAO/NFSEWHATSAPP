@@ -11,6 +11,7 @@ import { handleApiEmit } from "./handlers/api-emit.js";
 import { handleApiCobrar } from "./handlers/api-cobrar.js";
 import { handleApiCobrarAssinante } from "./handlers/api-cobrar-assinante.js";
 import { iniciarCronCobrancas, executarCicloCobrancas } from "./jobs/cobrancas-cron.js";
+import { iniciarCronResumoMatinal, executarCicloResumoMatinal } from "./jobs/resumo-matinal-cron.js";
 import { supabase } from "./supabase.js";
 import { logger } from "./utils/logger.js";
 import { restoreCertsFromEnv } from "./utils/restore-certs.js";
@@ -174,10 +175,47 @@ app.post("/api/cobrancas-cron-dispatch", async (req, res) => {
     }
 });
 
+// Dispatch manual do resumo matinal (idem cobrancas-cron-dispatch). Útil pra
+// testar formatação da mensagem sem esperar 7h da manhã. Requer role='admin'.
+app.post("/api/resumo-matinal-dispatch", async (req, res) => {
+    aplicarCorsApi(req, res);
+    try {
+        const authHeader = req.headers["authorization"] || "";
+        const match = authHeader.match(/^Bearer\s+(.+)$/i);
+        if (!match) {
+            return res.status(401).json({ error: "missing_token" });
+        }
+        if (!supabase) {
+            return res.status(500).json({ error: "supabase_offline" });
+        }
+        const { data: userData } = await supabase.auth.getUser(match[1]);
+        if (!userData?.user?.id) {
+            return res.status(401).json({ error: "invalid_token" });
+        }
+        const { data: role } = await supabase
+            .from("user_roles")
+            .select("role")
+            .eq("user_id", userData.user.id)
+            .eq("role", "admin")
+            .maybeSingle();
+        if (!role) {
+            return res.status(403).json({ error: "nao_e_admin" });
+        }
+        const resultado = await executarCicloResumoMatinal();
+        return res.status(200).json(resultado);
+    } catch (err) {
+        logger.error({ err: err.message }, "erro no dispatch do resumo matinal");
+        return res.status(500).json({ error: "internal_error", message: err.message });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     logger.info({ port: PORT, env: process.env.NODE_ENV }, "agent-nfse no ar");
     // Inicia cron diário de cobranças (9h BRT por default).
     // Desabilita com COBRANCAS_CRON_ENABLED=false.
     iniciarCronCobrancas();
+    // Cron matinal de resumo da agenda (seg-sex 7h BRT por default).
+    // Desabilita com RESUMO_MATINAL_CRON_ENABLED=false.
+    iniciarCronResumoMatinal();
 });

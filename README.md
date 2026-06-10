@@ -45,6 +45,20 @@ Evolution API · Supabase (RLS por user_id)
   **não passa pelo classificador** — continua direto pro extractor pra
   não quebrar fluxo de várias mensagens.
 
+### Resumo matinal proativo (cron)
+
+Todo dia útil às 7h BRT, o agent abre uma mensagem amigável pro
+WhatsApp do dono cadastrado mostrando: compromissos de hoje, atrasados,
+próximos 7 dias e total a pagar na semana. Cria hábito de consulta
+diária — inspirado no concorrente Meu Assessor. Sem nada cadastrado,
+não manda nada (zero spam).
+
+Dispatch manual via `POST /api/resumo-matinal-dispatch` (requer JWT
+admin) — útil pra testar formatação sem esperar 7h.
+
+Schedule customizável via env `RESUMO_MATINAL_CRON_EXPR`. Desabilita
+com `RESUMO_MATINAL_CRON_ENABLED=false`.
+
 ---
 
 ## Estrutura
