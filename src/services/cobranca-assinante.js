@@ -164,18 +164,26 @@ export async function enviarCobrancaAssinante({
     const hoje = new Date().toISOString().slice(0, 10);
     const { data: jaEnviado } = await supabase
         .from("poupeja_cobrancas_enviadas")
-        .select("id, enviado_em, sucesso")
+        .select("id, enviado_em, sucesso, destinatario_phone")
         .eq("user_id", userId)
         .eq("tipo_cobranca", tipo)
         .eq("data_referencia", hoje)
         .maybeSingle();
     if (jaEnviado) {
+        // Busca nome do user pra UX boa no toast do admin (não custa quase nada)
+        const { data: userDedup } = await supabase
+            .from("poupeja_users")
+            .select("name, email")
+            .eq("id", userId)
+            .maybeSingle();
         return {
             ok: true,
             status: 200,
             deduplicado: true,
             motivo: "ja_enviado_hoje",
             envio_anterior: jaEnviado,
+            destinatario: jaEnviado.destinatario_phone || null,
+            assinante: userDedup?.name || userDedup?.email || null,
         };
     }
 
