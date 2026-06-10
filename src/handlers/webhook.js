@@ -45,6 +45,9 @@ import {
 } from "../services/whatsapp.js";
 import { handleAgenda } from "./agenda.js";
 import { handleFinanceiro } from "./financeiro.js";
+import { handleFinanceiroBoleto } from "./financeiro-boleto.js";
+import { handleFinanceiroTransacao } from "./financeiro-transacao.js";
+import { handleFinanceiroExtrato } from "./financeiro-extrato.js";
 import { formatarResumoCliente } from "../utils/resumo.js";
 import { logger } from "../utils/logger.js";
 
@@ -349,19 +352,81 @@ async function _handleWebhookInner(evt) {
         }
 
         if (intencao.intencao === "registrar_financeiro") {
-            // FASE 2 — proxy HTTP pro workflow "Conciliação Bancária WhatsApp"
-            // do n8n (via "PAC-NFSE → Conciliação (Proxy)" que republica em
-            // RabbitMQ Meu_App). O n8n responde direto ao cliente pela
-            // Evolution configurada — agent-nfse só encaminha.
-            await handleFinanceiro({
-                evt,
+            // FASE 3 — roteamento por subtipo pra handler LOCAL (Node),
+            // substituindo o AI Agent do workflow n8n "Conciliação Bancária
+            // WhatsApp". Cada handler insere direto em poupeja_payables /
+            // poupeja_transactions via Supabase service role.
+            //
+            // Subtipo do classificador define o handler:
+            //   boleto              → financeiro-boleto.js     → poupeja_payables
+            //   pagamento_efetuado  → financeiro-transacao.js → poupeja_transactions
+            //   recebimento         → financeiro-transacao.js → poupeja_transactions
+            //   extrato_bancario    → financeiro-extrato.js   → poupeja_transactions (batch)
+            //   outro / desconhecido → tenta transacao, depois boleto, depois extrato
+            //
+            // FALLBACK: se o handler local devolver {ok:false} (não conseguiu
+            // classificar ou erro técnico), encaminha pro proxy n8n antigo.
+            // n8n vira "rede de segurança" durante validação em prod (7 dias).
+            const subtipo = intencao.subtipo || "outro";
+            const args = {
                 empresa,
                 numero,
                 texto: textoExtracao,
                 imagens: imagensExtracao,
                 pdf: pdfExtracao,
-                audioBase64: audioBase64Extracao,
-            });
+            };
+
+            let resultado = { ok: false, motivo: "subtipo_nao_roteado" };
+            try {
+                if (subtipo === "boleto") {
+                    resultado = await handleFinanceiroBoleto(args);
+                } else if (subtipo === "extrato_bancario") {
+                    resultado = await handleFinanceiroExtrato(args);
+                } else if (
+                    subtipo === "pagamento_efetuado" ||
+                    subtipo === "recebimento"
+                ) {
+                    resultado = await handleFinanceiroTransacao(args);
+                } else {
+                    // outro / desconhecido: tenta transação primeiro (mais comum),
+                    // depois boleto, depois extrato. Cada handler tem detecção
+                    // interna (not_transacao, not_boleto, not_extrato) que
+                    // sinaliza pra próxima tentativa.
+                    resultado = await handleFinanceiroTransacao(args);
+                    if (!resultado.ok && resultado.motivo === "not_transacao") {
+                        resultado = await handleFinanceiroBoleto(args);
+                    }
+                    if (!resultado.ok && resultado.motivo === "not_boleto") {
+                        resultado = await handleFinanceiroExtrato(args);
+                    }
+                }
+            } catch (err) {
+                logger.error(
+                    { err: err.message, subtipo },
+                    "financeiro: exceção no handler local — vai pro fallback proxy"
+                );
+                resultado = { ok: false, motivo: "exception" };
+            }
+
+            // Fallback: handler local não deu conta → tenta proxy n8n
+            if (!resultado.ok) {
+                logger.info(
+                    { subtipo, motivo: resultado.motivo },
+                    "financeiro: handler local falhou, fallback pro proxy n8n"
+                );
+                await handleFinanceiro({
+                    evt,
+                    empresa,
+                    numero,
+                    texto: textoExtracao,
+                    imagens: imagensExtracao,
+                    pdf: pdfExtracao,
+                    audioBase64: audioBase64Extracao,
+                });
+            } else {
+                logEvento("financeiro_local", empresa.id, null, { subtipo });
+            }
+
             for (const p of arquivosTemp) {
                 await fs.unlink(p).catch(() => {});
             }
