@@ -309,7 +309,7 @@ async function _handleWebhookInner(evt) {
             ["nao", "não", "n", "cancela", "cancelar", "para"].includes(lower)
         ) {
             finalizarConversa.run("cancelada", conversaAtiva.id);
-            await enviarTexto(numero, "Beleza, cancelado. Pode mandar outro quando quiser.");
+            await enviarTexto(numero, "👍 Cancelei. Quando quiser, é só me chamar.");
             return;
         }
 
@@ -500,7 +500,8 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
 
         if (result.status === "autorizado") {
             const numero_nfse = result.numero || result.chaveAcesso?.slice(-8) || "—";
-            const valorFmt = Number(payload.servico.valor_total).toFixed(2);
+            const valorFmt = Number(payload.servico.valor_total)
+                .toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
             // Tenta mandar PDF; se não tiver, manda só o texto com a chave.
             const pdfPath = result.pdfPath;
@@ -510,12 +511,15 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
                     numero,
                     pdfBuffer,
                     `NFS-e-${numero_nfse}.pdf`,
-                    `✅ Nota emitida! Número: ${numero_nfse}\nValor: R$ ${valorFmt}`
+                    `🎉 *Nota nº ${numero_nfse} autorizada!*\n💰 ${valorFmt}\n\nPDF tá aí ⬇️`
                 );
             } else {
                 await enviarTexto(
                     numero,
-                    `✅ Nota emitida!\nNúmero: ${numero_nfse}\nValor: R$ ${valorFmt}\nChave: ${result.chaveAcesso || "—"}`
+                    `🎉 *Nota nº ${numero_nfse} autorizada!*\n` +
+                    `💰 ${valorFmt}\n` +
+                    `🔑 Chave: ${result.chaveAcesso || "—"}\n\n` +
+                    `_(PDF deve cair em instantes, prefeitura tá liberando.)_`
                 );
             }
             finalizarConversa.run("finalizada", conversa.id);
@@ -525,19 +529,21 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
             // a SEFAZ retornar autorização (ver focus-webhook.js).
             await enviarTexto(
                 numero,
-                `📋 Sua nota está sendo processada pela prefeitura. Te aviso aqui mesmo assim que for autorizada (alguns minutos).`
+                `⏳ Mandei pra prefeitura — eles aceitaram e tão processando. ` +
+                `Te chamo aqui assim que sair (geralmente uns minutos). ☕`
             );
             finalizarConversa.run("aguardando_sefaz", conversa.id);
         } else {
             const erroMsg = result.erro || `Status: ${result.status}`;
             await enviarTexto(
                 numero,
-                `❌ A SEFAZ rejeitou a emissão: ${erroMsg}\n\nVou avisar a equipe pra investigar.`
+                `⚠️ A prefeitura recusou a emissão:\n\n_${erroMsg}_\n\n` +
+                `Não esquenta — já chamei minha equipe técnica pra ver o que rolou. A gente resolve.`
             );
             if (ADMIN_WHATSAPP) {
                 await enviarTexto(
                     ADMIN_WHATSAPP,
-                    `Nota ${result.referencia} rejeitada (${empresa.razao_social}): ${erroMsg}`
+                    `🚨 Nota ${result.referencia} rejeitada (${empresa.razao_social}): ${erroMsg}`
                 );
             }
             finalizarConversa.run("finalizada", conversa.id);
@@ -546,12 +552,12 @@ async function emitirEEnviarPdf(conversa, empresa, numero) {
         logger.error({ err: err.message }, "erro na emissão (roteador)");
         await enviarTexto(
             numero,
-            `❌ Tive um erro técnico ao emitir. A equipe foi notificada.`
+            `😬 Travei na hora de emitir. Já chamei a equipe técnica — me dá uns minutos que volto pra você.`
         );
         if (ADMIN_WHATSAPP) {
             await enviarTexto(
                 ADMIN_WHATSAPP,
-                `Erro técnico (${empresa.razao_social}): ${err.message}`
+                `🚨 Erro técnico emissão (${empresa.razao_social}): ${err.message}`
             );
         }
         finalizarConversa.run("finalizada", conversa.id);

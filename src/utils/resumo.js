@@ -93,28 +93,35 @@ function blocoServico(servico, competencia) {
 
 /**
  * Formata o resumo final pro cliente confirmar antes da emissão.
+ * Tom: secretário esperto que mostra o trabalho feito e pede o OK.
+ * Não soa formulário — soa conversa.
+ *
  * @param {Object} extracao  - resultado do extractor (já enriquecido com BrasilAPI/ViaCEP)
  * @param {Object} empresa   - row da tabela `empresas`
  * @returns {string} texto pronto pra enviarTexto()
  */
 export function formatarResumoCliente(extracao, empresa) {
+    const amb = rotuloAmbiente();
+    const ambBadge = amb === "PRODUÇÃO" ? "" : `\n_⚙️ Ambiente: ${amb}_`;
+
     const partes = [
-        "📋 *Confirme antes de emitir*",
+        "📋 *Pronto pra emitir. Confere?*",
         "",
-        `*Prestador:* ${empresa?.razao_social || "—"}`,
-        `*Ambiente:* ${rotuloAmbiente()}`,
-        "",
-        "*Tomador*",
+        "👤 *Pra quem vai a nota:*",
         ...blocoTomador(extracao?.tomador),
         "",
-        "*Serviço*",
+        "🛠️ *O serviço:*",
         ...blocoServico(extracao?.servico, extracao?.competencia),
     ];
 
     if (extracao?.observacoes) {
-        partes.push("", `_Obs: ${extracao.observacoes}_`);
+        partes.push("", `📝 _${extracao.observacoes}_`);
     }
 
-    partes.push("", "Responda *SIM* pra emitir ou *CANCELA* pra desistir.");
+    partes.push(
+        "",
+        "Tá certo? Manda *\"sim\"* que eu emito agora.",
+        "Pra mudar algo, manda *\"cancela\"* e me fala o que ajustar." + ambBadge,
+    );
     return partes.join("\n");
 }
