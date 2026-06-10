@@ -16,6 +16,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { supabase, isEnabled as supabaseEnabled } from "../supabase.js";
 import { enviarTexto } from "../services/whatsapp.js";
+import {
+    criarEventoGoogle,
+    excluirEventoGoogle,
+    atualizarEventoGoogle,
+} from "../services/google-calendar.js";
 import { logger } from "../utils/logger.js";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -156,7 +161,8 @@ async function listarCompromissos(userId, filtro) {
 }
 
 /**
- * Cria compromisso novo.
+ * Cria compromisso novo. Após salvar no Supabase, faz push pro Google
+ * Calendar do user (se conectado). Falha do Google não bloqueia.
  */
 async function criarCompromisso(userId, emitenteId, compromisso) {
     const payload = {
@@ -180,11 +186,28 @@ async function criarCompromisso(userId, emitenteId, compromisso) {
         .single();
 
     if (error) throw new Error(`Supabase criar: ${error.message}`);
+
+    // Push pro Google Calendar (silencioso — falha não derruba o fluxo)
+    try {
+        const googleEventId = await criarEventoGoogle(userId, data);
+        if (googleEventId) {
+            await supabase
+                .from("poupeja_compromissos")
+                .update({ google_event_id: googleEventId })
+                .eq("id", data.id);
+            data.google_event_id = googleEventId;
+        }
+    } catch (err) {
+        logger.warn({ err: err.message, compromissoId: data.id }, "agenda: falha sync Google");
+    }
+
     return data;
 }
 
 /**
  * Marca compromisso como concluído (busca o mais próximo do título aproximado).
+ * Sync Google: se único, exclui evento; se recorrente, atualiza pra próxima
+ * data. Falha do Google não bloqueia.
  */
 async function concluirCompromisso(userId, tituloAproximado) {
     // Busca por título com ilike (case-insensitive, contém)
@@ -209,6 +232,15 @@ async function concluirCompromisso(userId, tituloAproximado) {
             .update({ ativo: false, concluido_em: new Date().toISOString() })
             .eq("id", compromisso.id);
         if (upErr) throw new Error(`Supabase concluir: ${upErr.message}`);
+
+        // Apaga do Google (compromisso terminou)
+        if (compromisso.google_event_id) {
+            try {
+                await excluirEventoGoogle(userId, compromisso.google_event_id);
+            } catch (err) {
+                logger.warn({ err: err.message }, "agenda: falha excluindo evento Google");
+            }
+        }
     } else {
         const proxima = calcularProximaData(
             compromisso.data_proxima,
@@ -220,6 +252,10 @@ async function concluirCompromisso(userId, tituloAproximado) {
             .update({ data_proxima: proxima, concluido_em: null })
             .eq("id", compromisso.id);
         if (upErr) throw new Error(`Supabase reagendar: ${upErr.message}`);
+
+        // Compromisso recorrente: o Google já trata RRULE, não precisa
+        // alterar o evento. A próxima ocorrência aparece automática.
+        compromisso.data_proxima = proxima;
     }
 
     return compromisso;
