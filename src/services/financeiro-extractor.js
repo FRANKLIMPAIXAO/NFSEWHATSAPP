@@ -106,7 +106,21 @@ DEVOLVA APENAS JSON, sem markdown:
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/**
+ * Monta blocos de conteúdo pra Claude. SEMPRE injeta a DATA DE HOJE no
+ * início — sem isso, o LLM "chuta" datas aleatórias quando o usuário não
+ * menciona a data explicitamente (e sem dia ele inventa anos antigos ou
+ * datas futuras). Default deve ser HOJE quando ambíguo.
+ */
 function montarContentBlocks({ texto, imagens, pdf }) {
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    const hojeBR = new Date().toLocaleDateString("pt-BR", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+    });
+
     const blocks = [];
     if (pdf?.base64) {
         blocks.push({
@@ -127,7 +141,13 @@ function montarContentBlocks({ texto, imagens, pdf }) {
     }
     blocks.push({
         type: "text",
-        text: texto || "(sem texto — só mídia anexa)",
+        text:
+            `DATA DE HOJE: ${hojeISO} (${hojeBR})\n` +
+            `Use SEMPRE essa data como referência. Se o usuário disser ` +
+            `"ontem" use ${hojeISO} -1 dia, "amanhã" use +1 dia, etc. ` +
+            `Se NÃO mencionar data NENHUMA, use a data de HOJE acima — ` +
+            `NUNCA invente uma data fora desse contexto.\n\n` +
+            `MENSAGEM DO USUÁRIO:\n${texto || "(sem texto — só mídia anexa)"}`,
     });
     return blocks;
 }

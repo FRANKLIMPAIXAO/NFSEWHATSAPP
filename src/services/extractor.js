@@ -36,13 +36,26 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
 export async function extrairCampos(input, payloadAnterior = null) {
     const t0 = Date.now();
     const today = new Date().toISOString().slice(0, 10);
+    const hojeBR = new Date().toLocaleDateString("pt-BR", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+    });
 
     // Normaliza input: string vira {texto}
     const { texto, imagens, pdf } =
         typeof input === "string" ? { texto: input } : input || {};
 
     const temMidia = (imagens && imagens.length) || pdf;
-    const cabecalho = `DATA DE HOJE: ${today}`;
+    // Cabeçalho reforçado: sem isso o LLM chuta datas aleatórias quando
+    // o usuário não fala data explicitamente (ex: "emite nota pro João,
+    // R$ 1500" — sem cabeçalho LLM inventa data_emissao e competencia).
+    const cabecalho =
+        `DATA DE HOJE: ${today} (${hojeBR})\n` +
+        `Use SEMPRE essa data como referência pra data_emissao e competencia. ` +
+        `Se o usuário NÃO mencionar data, use ${today}. ` +
+        `NUNCA invente data fora desse contexto.`;
     const introTexto = temMidia
         ? "TEXTO/LEGENDA DO USUÁRIO (pode estar vazio se só mandou mídia):"
         : "TEXTO DO USUÁRIO:";

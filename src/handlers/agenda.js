@@ -92,7 +92,21 @@ DEVOLVA APENAS o JSON:
 async function classificarOperacaoAgenda(texto) {
     const t0 = Date.now();
     const today = new Date().toISOString().slice(0, 10);
-    const userText = `DATA DE HOJE: ${today}\n\nMENSAGEM:\n${texto}`;
+    const hojeBR = new Date().toLocaleDateString("pt-BR", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+    });
+    // Injeta data atual + instrução EXPLÍCITA pra LLM não chutar.
+    // Sem isso o modelo às vezes inventa datas aleatórias quando o usuário
+    // não especifica (ex: "lembra do aluguel" sem mencionar data).
+    const userText =
+        `DATA DE HOJE: ${today} (${hojeBR})\n` +
+        `Use SEMPRE essa data como referência. "amanhã" = ${today} +1d, ` +
+        `"semana que vem" = ${today} +7d, "todo dia 5" = próximo dia 5 a partir de hoje. ` +
+        `Se NÃO mencionar data NENHUMA, use ${today}. NUNCA invente data fora desse contexto.\n\n` +
+        `MENSAGEM:\n${texto}`;
 
     try {
         const response = await client.messages.create({
