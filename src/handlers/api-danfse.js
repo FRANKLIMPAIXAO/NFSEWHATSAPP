@@ -63,7 +63,7 @@ export async function handleApiDanfse(req, res) {
         // Busca nota escopada por user — guarda contra ref forjada
         const { data: nota, error: notaErr } = await supabase
             .from("poupeja_nfse")
-            .select("ref, cnpj_prestador, chave_nfse, numero_nfse, status, caminho_xml")
+            .select("ref, cnpj_prestador, chave_nfse, numero_nfse, status, caminho_xml, payload")
             .eq("user_id", userId)
             .eq("ref", ref)
             .maybeSingle();
@@ -82,23 +82,51 @@ export async function handleApiDanfse(req, res) {
             });
         }
 
-        // Busca empresa pelo CNPJ pra pegar token Focus + ambiente
+        // Busca empresa pra pegar token Focus + flag nacional.
+        // Tenta primeiro via payload.emitenteSupabaseId (UUID, salvo pelo
+        // agent quando emite via WhatsApp). Fallback: CNPJ limpo.
+        // Ambiente vem da env FOCUS_NFE_ENV (não há coluna no banco).
+        const emitenteIdNoPayload = nota.payload?.emitenteSupabaseId
+            || nota.payload?.empresa_id
+            || null;
         const cnpjLimpo = String(nota.cnpj_prestador || "").replace(/\D/g, "");
-        const { data: empresa, error: empErr } = await supabase
-            .from("poupeja_fiscal_emitentes")
-            .select("focus_token_producao, focus_token_homologacao, ambiente_focus, usa_nfse_nacional")
-            .eq("user_id", userId)
-            .eq("cnpj", cnpjLimpo)
-            .maybeSingle();
+
+        const selectCols = "focus_token_producao, focus_token_homologacao, usa_nfse_nacional";
+        let empresa = null;
+        let empErr = null;
+        if (emitenteIdNoPayload) {
+            const r = await supabase
+                .from("poupeja_fiscal_emitentes")
+                .select(selectCols)
+                .eq("user_id", userId)
+                .eq("id", emitenteIdNoPayload)
+                .maybeSingle();
+            empresa = r.data;
+            empErr = r.error;
+        }
+        if (!empresa && cnpjLimpo) {
+            const r = await supabase
+                .from("poupeja_fiscal_emitentes")
+                .select(selectCols)
+                .eq("user_id", userId)
+                .eq("cnpj", cnpjLimpo)
+                .maybeSingle();
+            empresa = r.data;
+            empErr = r.error;
+        }
 
         if (empErr || !empresa) {
+            logger.warn(
+                { err: empErr?.message, cnpjLimpo, emitenteIdNoPayload, userId, ref },
+                "api-danfse: empresa não encontrada"
+            );
             return jsonResponse(res, 404, {
                 error: "empresa_nao_encontrada",
                 message: "Empresa emitente não encontrada",
             });
         }
 
-        const ambiente = empresa.ambiente_focus || "producao";
+        const ambiente = process.env.FOCUS_NFE_ENV === "producao" ? "producao" : "homologacao";
         const focusToken = ambiente === "homologacao"
             ? empresa.focus_token_homologacao
             : empresa.focus_token_producao;
