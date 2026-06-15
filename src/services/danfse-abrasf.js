@@ -49,17 +49,35 @@ function firstOf(obj, ...paths) {
 }
 
 /**
- * Encontra o nó <InfNfse> percorrendo as variações comuns:
- *   CompNfse.Nfse.InfNfse  (v2.x)
- *   Nfse.InfNfse           (v1.x ou despida)
- *   InfNfse                (raiz direta)
+ * Encontra o nó <InfNfse> percorrendo as variações comuns. ABRASF 2.04
+ * envia em GerarNfseResposta > ListaNfse > CompNfse > Nfse > InfNfse;
+ * outros envelopes (ConsultarNfse, EnviarLoteRpsResposta) seguem
+ * estruturas parecidas.
  */
 function localizarInfNfse(root) {
-    return root?.CompNfse?.Nfse?.InfNfse
-        || root?.Nfse?.InfNfse
-        || root?.ConsultarNfseResposta?.ListaNfse?.CompNfse?.Nfse?.InfNfse
-        || root?.InfNfse
-        || root;
+    if (!root || typeof root !== "object") return null;
+    const candidatos = [
+        root?.GerarNfseResposta?.ListaNfse?.CompNfse?.Nfse?.InfNfse,
+        root?.ConsultarNfseResposta?.ListaNfse?.CompNfse?.Nfse?.InfNfse,
+        root?.ConsultarNfsePorRpsResposta?.CompNfse?.Nfse?.InfNfse,
+        root?.EnviarLoteRpsSincronoResposta?.ListaNfse?.CompNfse?.Nfse?.InfNfse,
+        root?.ListaNfse?.CompNfse?.Nfse?.InfNfse,
+        root?.CompNfse?.Nfse?.InfNfse,
+        root?.Nfse?.InfNfse,
+        root?.InfNfse,
+    ];
+    for (const c of candidatos) if (c) return c;
+    // Último recurso: procurar InfNfse em qualquer profundidade
+    function walk(obj) {
+        if (!obj || typeof obj !== "object") return null;
+        if (obj.InfNfse) return obj.InfNfse;
+        for (const k of Object.keys(obj)) {
+            const r = walk(obj[k]);
+            if (r) return r;
+        }
+        return null;
+    }
+    return walk(root);
 }
 
 function fmtMoeda(v) {
@@ -83,6 +101,13 @@ function fmtData(s) {
     return m2 ? s.slice(0, 10) : s;
 }
 
+function fmtDataHora(s) {
+    if (!s) return "-";
+    const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+    return fmtData(s);
+}
+
 function fmtCep(s) {
     const c = String(s || "").replace(/\D/g, "");
     if (c.length === 8) return c.replace(/^(\d{5})(\d{3})$/, "$1-$2");
@@ -99,13 +124,32 @@ function fmtAliquota(v) {
 
 /**
  * Extrai todos os campos relevantes do XML ABRASF parseado.
+ *
+ * Estrutura ABRASF v2.04: alguns campos ficam em InfNfse direto
+ * (PrestadorServico, ValoresNfse, OrgaoGerador), outros aninhados em
+ * DeclaracaoPrestacaoServico > InfDeclaracaoPrestacaoServico (Servico,
+ * Prestador.CpfCnpj, TomadorServico, Competencia). Esse merge é
+ * necessário pra mapear corretamente os campos do PDF.
  */
 function extrairDados(root) {
     const inf = localizarInfNfse(root) || {};
-    const prest = inf.PrestadorServico || inf.Prestador || {};
-    const tom = inf.TomadorServico || inf.Tomador || {};
-    const serv = inf.Servico || {};
-    const val = serv.Valores || inf.Valores || {};
+    const decl = inf.DeclaracaoPrestacaoServico?.InfDeclaracaoPrestacaoServico
+        || inf.DeclaracaoPrestacaoServico
+        || {};
+
+    // PrestadorServico tem razão/endereço/contato; CNPJ + IM ficam em
+    // DeclaracaoPrestacaoServico.Prestador.CpfCnpj.Cnpj
+    const prestId = decl.Prestador || {};
+    const prest = inf.PrestadorServico || decl.Prestador || {};
+
+    // TomadorServico fica DENTRO da declaração na 2.04
+    const tom = decl.TomadorServico || inf.TomadorServico || {};
+    const serv = decl.Servico || inf.Servico || {};
+    // Valores ABRASF: tem ValoresNfse (InfNfse) com totais e Servico.Valores
+    // com unitários — usa Servico.Valores como fonte (tem alíquota etc) e
+    // recorre a ValoresNfse pra ValorLiquidoNfse/BaseCalculo.
+    const val = serv.Valores || {};
+    const valNfse = inf.ValoresNfse || {};
 
     const endPrest = prest.Endereco || {};
     const endTom = tom.Endereco || {};
@@ -113,11 +157,15 @@ function extrairDados(root) {
     return {
         numero: firstOf(inf, "Numero", "NumeroNfse"),
         codigoVerificacao: firstOf(inf, "CodigoVerificacao"),
-        dataEmissao: fmtData(firstOf(inf, "DataEmissao")),
-        competencia: fmtData(firstOf(inf, "Competencia")),
+        dataEmissao: fmtDataHora(firstOf(inf, "DataEmissao")),
+        competencia: fmtData(firstOf(decl, "Competencia") || firstOf(inf, "Competencia")),
         prestador: {
-            cnpj: fmtCnpjCpf(firstOf(prest, "IdentificacaoPrestador.Cnpj", "IdentificacaoPrestador.CpfCnpj.Cnpj", "Cnpj", "CpfCnpj.Cnpj")),
-            im: firstOf(prest, "IdentificacaoPrestador.InscricaoMunicipal", "InscricaoMunicipal"),
+            // CNPJ vem da DeclaracaoPrestacaoServico, não do PrestadorServico
+            cnpj: fmtCnpjCpf(firstOf(
+                prestId, "CpfCnpj.Cnpj", "CpfCnpj.Cpf", "Cnpj", "Cpf",
+            ) || firstOf(prest, "IdentificacaoPrestador.Cnpj", "CpfCnpj.Cnpj", "Cnpj")),
+            im: firstOf(prestId, "InscricaoMunicipal")
+                || firstOf(prest, "IdentificacaoPrestador.InscricaoMunicipal", "InscricaoMunicipal"),
             razao: firstOf(prest, "RazaoSocial"),
             nomeFantasia: firstOf(prest, "NomeFantasia"),
             logradouro: firstOf(endPrest, "Endereco", "Logradouro"),
@@ -158,15 +206,18 @@ function extrairDados(root) {
             itemLista: firstOf(serv, "ItemListaServico"),
             codigoCnae: firstOf(serv, "CodigoCnae"),
             codigoTribMunicipio: firstOf(serv, "CodigoTributacaoMunicipio"),
-            municipioPrestacao: firstOf(serv, "CodigoMunicipio", "MunicipioPrestacaoServico"),
+            municipioPrestacao: firstOf(serv, "CodigoMunicipio", "MunicipioPrestacaoServico", "MunicipioIncidencia"),
+            descricaoCodigoTrib: firstOf(inf, "DescricaoCodigoTributacaoMunicípio", "DescricaoCodigoTributacaoMunicipio"),
         },
         valores: {
+            // ValorServicos sempre do Servico.Valores
             servicos: Number(firstOf(val, "ValorServicos")) || 0,
-            iss: Number(firstOf(val, "ValorIss")) || 0,
-            issRetido: firstOf(val, "IssRetido"),
+            iss: Number(firstOf(val, "ValorIss")) || Number(firstOf(valNfse, "ValorIss")) || 0,
+            issRetido: firstOf(serv, "IssRetido") || firstOf(val, "IssRetido"),
             aliquota: firstOf(val, "Aliquota"),
-            baseCalculo: Number(firstOf(val, "BaseCalculo")) || 0,
-            valorLiquido: Number(firstOf(val, "ValorLiquidoNfse")) || Number(firstOf(val, "ValorServicos")) || 0,
+            // BaseCalculo geralmente em ValoresNfse; cai pra ValorServicos
+            baseCalculo: Number(firstOf(valNfse, "BaseCalculo")) || Number(firstOf(val, "BaseCalculo")) || Number(firstOf(val, "ValorServicos")) || 0,
+            valorLiquido: Number(firstOf(valNfse, "ValorLiquidoNfse")) || Number(firstOf(val, "ValorLiquidoNfse")) || Number(firstOf(val, "ValorServicos")) || 0,
             pis: Number(firstOf(val, "ValorPis")) || 0,
             cofins: Number(firstOf(val, "ValorCofins")) || 0,
             inss: Number(firstOf(val, "ValorInss")) || 0,
@@ -179,6 +230,12 @@ function extrairDados(root) {
             municipio: firstOf(inf, "OrgaoGerador.CodigoMunicipio"),
             uf: firstOf(inf, "OrgaoGerador.Uf"),
         },
+        rps: {
+            numero: firstOf(decl, "Rps.IdentificacaoRps.Numero"),
+            serie: firstOf(decl, "Rps.IdentificacaoRps.Serie"),
+        },
+        outrasInformacoes: firstOf(inf, "OutrasInformacoes"),
+        optanteSimples: firstOf(decl, "OptanteSimplesNacional") === "1" ? "Sim" : "Não",
     };
 }
 
@@ -218,6 +275,15 @@ export async function gerarDanfseAbrasf(xmlString) {
                 { label: "CÓDIGO DE VERIFICAÇÃO", valor: d.codigoVerificacao || "-", w: 0.27 },
                 { label: "DATA E HORA DE EMISSÃO", valor: d.dataEmissao || "-", w: 0.27 },
                 { label: "COMPETÊNCIA", valor: d.competencia || "-", w: 0.26 },
+            ]);
+
+            // ── RPS + Simples Nacional ────────────────────────────────
+            caixa(doc, left, pageW, [
+                [
+                    { label: "Nº RPS", valor: d.rps.numero || "-", w: 0.25 },
+                    { label: "SÉRIE RPS", valor: d.rps.serie || "-", w: 0.25 },
+                    { label: "OPTANTE SIMPLES NACIONAL", valor: d.optanteSimples, w: 0.5 },
+                ],
             ]);
 
             // ── Prestador ─────────────────────────────────────────────
@@ -299,6 +365,17 @@ export async function gerarDanfseAbrasf(xmlString) {
                         { label: "CSLL", valor: fmtMoeda(d.valores.csll), w: 0.2 },
                     ],
                 ]);
+            }
+
+            // ── Outras informações ────────────────────────────────────
+            if (d.outrasInformacoes && d.outrasInformacoes.trim()) {
+                secaoTitulo(doc, left, pageW, "OUTRAS INFORMAÇÕES");
+                const texto = d.outrasInformacoes.replace(/\\s\\n/g, "\n").replace(/&#x[0-9A-F]+;/g, "");
+                const h = doc.heightOfString(texto, { width: pageW - 16, fontSize: 9 });
+                doc.rect(left, doc.y, pageW, h + 12).stroke();
+                doc.fontSize(9).font("Helvetica").fillColor("#000")
+                    .text(texto, left + 8, doc.y + 6, { width: pageW - 16 });
+                doc.y += h + 14;
             }
 
             // ── Rodapé ────────────────────────────────────────────────
