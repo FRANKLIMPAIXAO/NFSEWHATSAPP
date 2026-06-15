@@ -8,6 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { handleWebhook } from "./handlers/webhook.js";
 import { handleFocusWebhook } from "./handlers/focus-webhook.js";
 import { handleApiEmit } from "./handlers/api-emit.js";
+import { handleApiDanfse } from "./handlers/api-danfse.js";
 import { handleApiCobrar } from "./handlers/api-cobrar.js";
 import { handleApiCobrarAssinante } from "./handlers/api-cobrar-assinante.js";
 import { iniciarCronCobrancas, executarCicloCobrancas } from "./jobs/cobrancas-cron.js";
@@ -42,7 +43,7 @@ function aplicarCorsApi(req, res) {
         res.setHeader("Vary", "Origin");
         res.setHeader("Access-Control-Allow-Credentials", "true");
     }
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
     res.setHeader("Access-Control-Max-Age", "600");
 }
@@ -122,6 +123,14 @@ app.options("/api/*", (req, res) => {
 app.post("/api/emit", async (req, res) => {
     aplicarCorsApi(req, res);
     await handleApiEmit(req, res);
+});
+
+// API HTTP — gera DANFSe (PDF) a partir do XML autorizado da nota. Usado
+// pelo painel quando o caminho_pdf da Focus não é PDF binário (Aparecida
+// ISSNET retorna HTML do portal). Lib `nfse-nacional` em vez de Deno.
+app.get("/api/danfse/:ref", async (req, res) => {
+    aplicarCorsApi(req, res);
+    await handleApiDanfse(req, res);
 });
 
 // API HTTP — cobrança via WhatsApp. Dispara lembrete pro whatsapp_dono
