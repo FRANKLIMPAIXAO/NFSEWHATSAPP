@@ -10,6 +10,25 @@
 import PDFDocument from "pdfkit";
 import { XMLParser } from "fast-xml-parser";
 
+/**
+ * Detecta formato do XML retornado pela Focus.
+ *   ABRASF v2.x → <CompNfse> (Aparecida, Goiânia)
+ *   ABRASF v1.x → <Rps> sem <DPS>
+ *   Nacional 1.01 (LC 214/2025) → <DPS> ou <infDPS>
+ * Case-sensitive: <InfNfse> (ABRASF) ≠ <infNFSe> (Nacional).
+ * ABRASF checado primeiro pra evitar falso positivo no infNFSe.
+ */
+export function detectarFormatoXml(xml) {
+    if (!xml) return "desconhecido";
+    if (/<\s*(?:[\w-]+:)?CompNfse[\s>]/.test(xml)) return "abrasf";
+    if (/<\s*(?:[\w-]+:)?InfNfse[\s>]/.test(xml)) return "abrasf";
+    if (/<\s*(?:[\w-]+:)?DPS[\s>]/.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?infDPS[\s>]/.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?infNFSe[\s>]/.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?Rps[\s>]/.test(xml)) return "abrasf";
+    return "desconhecido";
+}
+
 const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",

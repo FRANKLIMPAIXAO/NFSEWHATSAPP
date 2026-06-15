@@ -22,6 +22,7 @@ import { atualizarNotaResultado } from "../db/supabase-nota-repo.js";
 import { baixarPdf, baixarXml } from "../services/focusnfe.js";
 import { enviarPdf, enviarTexto } from "../services/whatsapp.js";
 import { DanfeService } from "nfse-nacional";
+import { gerarDanfseAbrasf, detectarFormatoXml } from "../services/danfse-abrasf.js";
 import { logger } from "../utils/logger.js";
 
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP;
@@ -165,35 +166,51 @@ export async function handleFocusWebhook(body) {
             }
 
             // 2ª tentativa: gerar DANFSe localmente a partir do XML autorizado.
-            // Mesma estratégia que o emissor EPN usa (services/danfe.js) — funciona
-            // pra NFSe Nacional 1.01 (Aparecida e outros municípios ISSNET).
+            // Detecta formato (ABRASF Aparecida/Goiânia vs Nacional 1.01) e
+            // usa o renderer apropriado. ABRASF → pdfkit próprio, Nacional →
+            // DanfeService da lib nfse-nacional.
             if (!pdfEnviado) {
                 try {
                     const urlXmlPayload = body.caminho_xml_nota_fiscal || body.url_xml || null;
                     const xml = await baixarXml(referencia, empresa.focus_token, empresa, urlXmlPayload);
-                    const danfe = new DanfeService();
-                    const out = await Promise.race([
-                        danfe.generateFromXml(xml, { chaveAcesso: codVerif || numero }),
-                        new Promise((_, rej) =>
-                            setTimeout(() => rej(new Error("DANFSe timeout 15s")), 15000)
-                        ),
-                    ]);
-                    if (out?.pdfBytes) {
+                    const formato = detectarFormatoXml(xml);
+                    logger.info({ referencia, formato }, "focus-webhook: gerando DANFSe");
+
+                    let pdfBytes = null;
+                    if (formato === "abrasf") {
+                        pdfBytes = await Promise.race([
+                            gerarDanfseAbrasf(xml),
+                            new Promise((_, rej) =>
+                                setTimeout(() => rej(new Error("DANFSe ABRASF timeout 15s")), 15000)
+                            ),
+                        ]);
+                    } else {
+                        const danfe = new DanfeService();
+                        const out = await Promise.race([
+                            danfe.generateFromXml(xml, { chaveAcesso: codVerif || numero }),
+                            new Promise((_, rej) =>
+                                setTimeout(() => rej(new Error("DANFSe Nacional timeout 15s")), 15000)
+                            ),
+                        ]);
+                        pdfBytes = out?.pdfBytes ? Buffer.from(out.pdfBytes) : null;
+                    }
+
+                    if (pdfBytes) {
                         await enviarPdf(
                             conversa.whatsapp,
-                            Buffer.from(out.pdfBytes),
+                            pdfBytes,
                             `NFS-e-${numero}.pdf`,
                             formatarMensagemNotaEmitida(nota, numero)
                         );
                         pdfEnviado = true;
                         logger.info(
-                            { referencia, tamanho: out.pdfBytes.length },
+                            { referencia, formato, tamanho: pdfBytes.length },
                             "focus-webhook: DANFSe local gerado e enviado"
                         );
                     } else {
                         logger.warn(
-                            { referencia, hasHtml: !!out?.html },
-                            "focus-webhook: DanfeService não retornou pdfBytes"
+                            { referencia, formato },
+                            "focus-webhook: renderer não retornou pdfBytes"
                         );
                     }
                 } catch (err) {
