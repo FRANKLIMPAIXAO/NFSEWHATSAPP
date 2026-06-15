@@ -34,7 +34,14 @@ function formatarData(iso) {
 }
 
 function rotuloAmbiente() {
-    const amb = (process.env.EPN_AMBIENTE || "homologacao").toLowerCase();
+    // Prioriza FOCUS_NFE_ENV (env usada pela maioria dos emissores via Focus).
+    // EPN_AMBIENTE é fallback pra clientes que ainda usam EPN direto (raros).
+    // Default "homologacao" pra fluxo defensivo se nenhuma estiver setada.
+    const amb = (
+        process.env.FOCUS_NFE_ENV ||
+        process.env.EPN_AMBIENTE ||
+        "homologacao"
+    ).toLowerCase();
     return amb === "producao" ? "PRODUÇÃO" : "HOMOLOGAÇÃO (teste)";
 }
 
