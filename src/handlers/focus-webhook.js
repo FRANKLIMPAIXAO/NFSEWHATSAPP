@@ -112,15 +112,14 @@ export async function handleFocusWebhook(body) {
         logger.info({ referencia, whatsapp: !!conversa?.whatsapp }, "focus-webhook: fallback Supabase OK");
     }
 
-    if (nota.status === "autorizado" || nota.status === "rejeitado" || nota.status === "cancelado") {
-        logger.info(
-            { referencia, statusAtual: nota.status },
-            "focus-webhook: nota já em estado final, ignorando (idempotente)"
-        );
-        return { ok: true, reason: "idempotente", statusAtual: nota.status };
-    }
-
     const novoStatus = statusFromPayload(body);
+
+    // Sem guarda idempotente por status: a Focus pode mandar webhook
+    // múltiplas vezes (retry) ou o status pode já ter sido atualizado
+    // por outra rota (resposta síncrona, polling, botão manual). Em
+    // qualquer caso, queremos garantir que o PDF foi enviado pro Zap.
+    // Risco de PDF duplicado existe mas é menor que risco de PDF nunca
+    // chegar — Focus geralmente só reenvia em falha 5xx.
     logger.info(
         { referencia, statusAnterior: nota.status, novoStatus, evento: body.evento, fonteRemota },
         "focus-webhook: processando callback"
@@ -164,7 +163,23 @@ export async function handleFocusWebhook(body) {
             response: body,
         }).catch((err) => logger.warn({ err: err.message }, "focus-webhook: falha atualizando Supabase"));
 
-        if (conversa?.whatsapp) {
+        // Decide o WhatsApp do destinatário:
+        //   1ª preferência: conversa.whatsapp (quem iniciou a conversa do bot)
+        //   Fallback:       whatsapp_dono da empresa (cadastrado em poupeja_fiscal_emitentes)
+        // Antes só usávamos conversa.whatsapp — quando SQLite era perdido em
+        // restart, ficava null e o envio era pulado silenciosamente.
+        let destinoWhatsapp = conversa?.whatsapp || null;
+        if (!destinoWhatsapp) {
+            try {
+                const r = await buscarNotaPorRef(referencia);
+                destinoWhatsapp = r?.whatsapp || null;
+                if (destinoWhatsapp) {
+                    logger.info({ referencia, destino: destinoWhatsapp }, "focus-webhook: usando whatsapp_dono como destino");
+                }
+            } catch (_) {}
+        }
+
+        if (destinoWhatsapp) {
             // Focus envia URL do "PDF" no payload (`url` ou `url_danfse`).
             // Pra NFSe Nacional/ISSNET (Aparecida), essa URL é uma PÁGINA HTML
             // do portal da prefeitura (issnetonline.com.br/.../*.aspx), não
@@ -185,7 +200,7 @@ export async function handleFocusWebhook(body) {
                     urlPdfPayload
                 );
                 await enviarPdf(
-                    conversa.whatsapp,
+                    destinoWhatsapp,
                     pdfBuffer,
                     `NFS-e-${numero}.pdf`,
                     formatarMensagemNotaEmitida(nota, numero)
@@ -260,20 +275,25 @@ export async function handleFocusWebhook(body) {
             if (!pdfEnviado) {
                 if (urlPdfPayload) {
                     await enviarTexto(
-                        conversa.whatsapp,
+                        destinoWhatsapp,
                         formatarMensagemSemPdfBinario(nota, numero, codVerif, urlPdfPayload)
-                    ).catch(() => {});
+                    ).catch((e) => logger.warn({ err: e.message, referencia }, "focus-webhook: enviarTexto falhou (link)"));
                 } else {
                     await enviarTexto(
-                        conversa.whatsapp,
+                        destinoWhatsapp,
                         `${formatarMensagemNotaEmitida(nota, numero)}\n🔐 Código: ${codVerif || "—"}\n\n_Veja o PDF no painel pacnobolso.com.br/fiscal._`
-                    ).catch(() => {});
+                    ).catch((e) => logger.warn({ err: e.message, referencia }, "focus-webhook: enviarTexto falhou (texto)"));
                 }
             }
 
-            if (conversa.id) finalizarConversa.run("finalizada", conversa.id);
+            if (conversa?.id) finalizarConversa.run("finalizada", conversa.id);
+        } else {
+            logger.error(
+                { referencia },
+                "focus-webhook: sem destino WhatsApp (nem conversa nem whatsapp_dono) — PDF não foi enviado"
+            );
         }
-        return { ok: true, status: "autorizado", numero };
+        return { ok: true, status: "autorizado", numero, enviado: !!destinoWhatsapp };
     }
 
     if (novoStatus === "rejeitado" || novoStatus === "cancelado") {
@@ -297,14 +317,23 @@ export async function handleFocusWebhook(body) {
             response: body,
         }).catch((err) => logger.warn({ err: err.message }, "focus-webhook: falha atualizando Supabase"));
 
-        if (conversa?.whatsapp) {
+        // Mesmo fallback do caminho autorizado: usa whatsapp_dono quando
+        // SQLite não tem a conversa local.
+        let destinoErro = conversa?.whatsapp || null;
+        if (!destinoErro) {
+            try {
+                const r = await buscarNotaPorRef(referencia);
+                destinoErro = r?.whatsapp || null;
+            } catch (_) {}
+        }
+        if (destinoErro) {
             const acao = novoStatus === "cancelado" ? "cancelou" : "rejeitou";
             await enviarTexto(
-                conversa.whatsapp,
+                destinoErro,
                 `⚠️ A prefeitura ${acao} a emissão:\n\n_${motivo}_\n\n` +
                 `Não esquenta — já chamei minha equipe técnica pra ver o que rolou. A gente resolve.`
-            );
-            if (conversa.id) finalizarConversa.run("finalizada", conversa.id);
+            ).catch((e) => logger.warn({ err: e.message, referencia }, "focus-webhook: falha enviando aviso de erro"));
+            if (conversa?.id) finalizarConversa.run("finalizada", conversa.id);
         }
         if (ADMIN_WHATSAPP) {
             await enviarTexto(
