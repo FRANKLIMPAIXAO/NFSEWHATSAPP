@@ -17,7 +17,23 @@
 import { DanfeService } from "nfse-nacional";
 import { supabase } from "../supabase.js";
 import { baixarXml } from "../services/focusnfe.js";
+import { gerarDanfseAbrasf } from "../services/danfse-abrasf.js";
 import { logger } from "../utils/logger.js";
+
+/**
+ * Detecta formato do XML retornado pela Focus.
+ * Nacional 1.01 usa tag <NFSe> ou <DPS> (LC 214/2025);
+ * ABRASF 1.x/2.x usa <CompNfse>, <Nfse>, <InfNfse>, <Rps>.
+ */
+function detectarFormatoXml(xml) {
+    if (!xml) return "desconhecido";
+    if (/<\s*(?:[\w-]+:)?DPS[\s>]/i.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?infNFSe[\s>]/i.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?CompNfse[\s>]/i.test(xml)) return "abrasf";
+    if (/<\s*(?:[\w-]+:)?InfNfse[\s>]/i.test(xml)) return "abrasf";
+    if (/<\s*(?:[\w-]+:)?Rps[\s>]/i.test(xml)) return "abrasf";
+    return "desconhecido";
+}
 
 function jsonResponse(res, status, body) {
     res.status(status).json(body);
@@ -145,21 +161,28 @@ export async function handleApiDanfse(req, res) {
             usa_nfse_nacional: !!empresa.usa_nfse_nacional,
         };
         const xml = await baixarXml(ref, focusToken, empresaShim, nota.caminho_xml || null);
+        const formato = detectarFormatoXml(xml);
 
-        const danfe = new DanfeService();
-        const out = await Promise.race([
-            danfe.generateFromXml(xml, { chaveAcesso: nota.chave_nfse || nota.numero_nfse || ref }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error("DANFSe timeout 20s")), 20000)),
-        ]);
+        logger.info({ ref, formato, tamanho: xml.length }, "api-danfse: gerando PDF");
 
-        if (!out?.pdfBytes) {
-            return jsonResponse(res, 500, {
-                error: "danfse_falhou",
-                message: "DanfeService não retornou PDF",
-            });
+        let pdfBuffer;
+        if (formato === "abrasf") {
+            pdfBuffer = await gerarDanfseAbrasf(xml);
+        } else {
+            // Nacional 1.01 (ou desconhecido — tenta Nacional como fallback)
+            const danfe = new DanfeService();
+            const out = await Promise.race([
+                danfe.generateFromXml(xml, { chaveAcesso: nota.chave_nfse || nota.numero_nfse || ref }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error("DANFSe timeout 20s")), 20000)),
+            ]);
+            if (!out?.pdfBytes) {
+                return jsonResponse(res, 500, {
+                    error: "danfse_falhou",
+                    message: "DanfeService não retornou PDF",
+                });
+            }
+            pdfBuffer = Buffer.from(out.pdfBytes);
         }
-
-        const pdfBuffer = Buffer.from(out.pdfBytes);
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", `inline; filename="NFS-e-${nota.numero_nfse || ref}.pdf"`);
         res.setHeader("Content-Length", pdfBuffer.length);
