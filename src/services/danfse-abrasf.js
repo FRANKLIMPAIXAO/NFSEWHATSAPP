@@ -4,30 +4,62 @@
  * Necessário pra Aparecida/Goiânia e outros municípios que ainda emitem
  * em formato ABRASF — a lib `nfse-nacional` só sabe ler Nacional 1.01.
  *
- * Não tenta validar schema — tolerante: campo ausente vira "-".
- * Suporta diferentes prefixos de namespace (nfse:, ns2:, sem prefixo).
+ * Layout segue o padrão visual da NFS-e municipal (cabeçalho com
+ * prefeitura, prestador/tomador em caixas, valores tabulados).
  */
 import PDFDocument from "pdfkit";
+import { XMLParser } from "fast-xml-parser";
+
+const parser = new XMLParser({
+    ignoreAttributes: false,
+    attributeNamePrefix: "@_",
+    removeNSPrefix: true, // remove ns2:, nfse:, etc — fica só Tag
+    parseTagValue: true,
+    parseAttributeValue: false,
+    trimValues: true,
+});
 
 /**
- * Extrai conteúdo de uma tag de qualquer namespace.
- * Ex: pickTag(xml, "Numero") casa <Numero>x</Numero>, <ns2:Numero>x</ns2:Numero>, etc.
+ * Caminha um path tipo "a.b.c" no objeto retornado pelo parser, tolerante
+ * a undefined. Retorna string vazia se algum nó não existir.
  */
-function pickTag(xml, tag) {
-    const re = new RegExp(`<(?:[\\w-]+:)?${tag}[^>]*>([\\s\\S]*?)<\\/(?:[\\w-]+:)?${tag}>`, "i");
-    const m = xml.match(re);
-    if (!m) return null;
-    return m[1].trim();
+function pick(obj, path) {
+    if (!obj) return "";
+    const parts = path.split(".");
+    let cur = obj;
+    for (const p of parts) {
+        if (cur == null) return "";
+        cur = cur[p];
+    }
+    if (cur == null) return "";
+    if (typeof cur === "object") return "";
+    return String(cur);
 }
 
 /**
- * Mesma coisa mas devolve o BLOCO INTEIRO (com as tags) — útil pra
- * delimitar áreas tipo <Servico>...</Servico> antes de procurar subtags.
+ * Procura o primeiro path que retorna valor não vazio. Útil pra cobrir
+ * variações de schema ABRASF (v1.x vs v2.04 vs municipal customizado).
  */
-function pickBlock(xml, tag) {
-    const re = new RegExp(`<(?:[\\w-]+:)?${tag}[^>]*>[\\s\\S]*?<\\/(?:[\\w-]+:)?${tag}>`, "i");
-    const m = xml.match(re);
-    return m ? m[0] : null;
+function firstOf(obj, ...paths) {
+    for (const p of paths) {
+        const v = pick(obj, p);
+        if (v !== "") return v;
+    }
+    return "";
+}
+
+/**
+ * Encontra o nó <InfNfse> percorrendo as variações comuns:
+ *   CompNfse.Nfse.InfNfse  (v2.x)
+ *   Nfse.InfNfse           (v1.x ou despida)
+ *   InfNfse                (raiz direta)
+ */
+function localizarInfNfse(root) {
+    return root?.CompNfse?.Nfse?.InfNfse
+        || root?.Nfse?.InfNfse
+        || root?.ConsultarNfseResposta?.ListaNfse?.CompNfse?.Nfse?.InfNfse
+        || root?.InfNfse
+        || root;
 }
 
 function fmtMoeda(v) {
@@ -46,67 +78,106 @@ function fmtCnpjCpf(doc) {
 function fmtData(s) {
     if (!s) return "-";
     const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
-    return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+    const m2 = String(s).match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+    return m2 ? s.slice(0, 10) : s;
+}
+
+function fmtCep(s) {
+    const c = String(s || "").replace(/\D/g, "");
+    if (c.length === 8) return c.replace(/^(\d{5})(\d{3})$/, "$1-$2");
+    return c || "-";
+}
+
+function fmtAliquota(v) {
+    const n = Number(v);
+    if (!isFinite(n) || n === 0) return "-";
+    // Alíquota pode vir como 0.03 (3%) ou 3
+    const pct = n < 1 ? n * 100 : n;
+    return `${pct.toFixed(2)}%`;
 }
 
 /**
- * Extrai todos os campos relevantes do XML ABRASF.
+ * Extrai todos os campos relevantes do XML ABRASF parseado.
  */
-function parseAbrasf(xml) {
-    const prestadorBlock = pickBlock(xml, "PrestadorServico") || pickBlock(xml, "Prestador") || xml;
-    const tomadorBlock = pickBlock(xml, "TomadorServico") || pickBlock(xml, "Tomador") || xml;
-    const servicoBlock = pickBlock(xml, "Servico") || xml;
-    const valoresBlock = pickBlock(servicoBlock, "Valores") || servicoBlock;
-    const enderecoPrestadorBlock = pickBlock(prestadorBlock, "Endereco") || prestadorBlock;
-    const enderecoTomadorBlock = pickBlock(tomadorBlock, "Endereco") || tomadorBlock;
+function extrairDados(root) {
+    const inf = localizarInfNfse(root) || {};
+    const prest = inf.PrestadorServico || inf.Prestador || {};
+    const tom = inf.TomadorServico || inf.Tomador || {};
+    const serv = inf.Servico || {};
+    const val = serv.Valores || inf.Valores || {};
+
+    const endPrest = prest.Endereco || {};
+    const endTom = tom.Endereco || {};
 
     return {
-        numero: pickTag(xml, "Numero") || "-",
-        codigoVerificacao: pickTag(xml, "CodigoVerificacao") || "-",
-        dataEmissao: fmtData(pickTag(xml, "DataEmissao") || pickTag(xml, "DataEmissaoRps")),
-        competencia: fmtData(pickTag(xml, "Competencia")),
+        numero: firstOf(inf, "Numero", "NumeroNfse"),
+        codigoVerificacao: firstOf(inf, "CodigoVerificacao"),
+        dataEmissao: fmtData(firstOf(inf, "DataEmissao")),
+        competencia: fmtData(firstOf(inf, "Competencia")),
         prestador: {
-            cnpj: fmtCnpjCpf(pickTag(prestadorBlock, "Cnpj") || pickTag(prestadorBlock, "CpfCnpj")),
-            im: pickTag(prestadorBlock, "InscricaoMunicipal") || "-",
-            razao: pickTag(prestadorBlock, "RazaoSocial") || "-",
-            nomeFantasia: pickTag(prestadorBlock, "NomeFantasia") || "",
-            endereco: pickTag(enderecoPrestadorBlock, "Endereco") || "-",
-            numero: pickTag(enderecoPrestadorBlock, "Numero") || "",
-            bairro: pickTag(enderecoPrestadorBlock, "Bairro") || "",
-            municipio: pickTag(enderecoPrestadorBlock, "CodigoMunicipio") || "",
-            uf: pickTag(enderecoPrestadorBlock, "Uf") || "",
-            cep: pickTag(enderecoPrestadorBlock, "Cep") || "",
+            cnpj: fmtCnpjCpf(firstOf(prest, "IdentificacaoPrestador.Cnpj", "IdentificacaoPrestador.CpfCnpj.Cnpj", "Cnpj", "CpfCnpj.Cnpj")),
+            im: firstOf(prest, "IdentificacaoPrestador.InscricaoMunicipal", "InscricaoMunicipal"),
+            razao: firstOf(prest, "RazaoSocial"),
+            nomeFantasia: firstOf(prest, "NomeFantasia"),
+            logradouro: firstOf(endPrest, "Endereco", "Logradouro"),
+            numero: firstOf(endPrest, "Numero"),
+            complemento: firstOf(endPrest, "Complemento"),
+            bairro: firstOf(endPrest, "Bairro"),
+            municipio: firstOf(endPrest, "CodigoMunicipio", "Municipio"),
+            uf: firstOf(endPrest, "Uf"),
+            cep: fmtCep(firstOf(endPrest, "Cep")),
+            telefone: firstOf(prest, "Contato.Telefone"),
+            email: firstOf(prest, "Contato.Email"),
         },
         tomador: {
-            cnpj: fmtCnpjCpf(pickTag(tomadorBlock, "Cnpj") || pickTag(tomadorBlock, "Cpf") || pickTag(tomadorBlock, "CpfCnpj")),
-            im: pickTag(tomadorBlock, "InscricaoMunicipal") || "",
-            razao: pickTag(tomadorBlock, "RazaoSocial") || "-",
-            endereco: pickTag(enderecoTomadorBlock, "Endereco") || "-",
-            numero: pickTag(enderecoTomadorBlock, "Numero") || "",
-            bairro: pickTag(enderecoTomadorBlock, "Bairro") || "",
-            municipio: pickTag(enderecoTomadorBlock, "CodigoMunicipio") || "",
-            uf: pickTag(enderecoTomadorBlock, "Uf") || "",
-            cep: pickTag(enderecoTomadorBlock, "Cep") || "",
-            email: pickTag(tomadorBlock, "Email") || "",
+            cnpjCpf: fmtCnpjCpf(firstOf(
+                tom,
+                "IdentificacaoTomador.CpfCnpj.Cnpj",
+                "IdentificacaoTomador.CpfCnpj.Cpf",
+                "IdentificacaoTomador.Cnpj",
+                "IdentificacaoTomador.Cpf",
+                "CpfCnpj.Cnpj",
+                "CpfCnpj.Cpf",
+                "Cnpj",
+                "Cpf",
+            )),
+            im: firstOf(tom, "IdentificacaoTomador.InscricaoMunicipal", "InscricaoMunicipal"),
+            razao: firstOf(tom, "RazaoSocial"),
+            logradouro: firstOf(endTom, "Endereco", "Logradouro"),
+            numero: firstOf(endTom, "Numero"),
+            complemento: firstOf(endTom, "Complemento"),
+            bairro: firstOf(endTom, "Bairro"),
+            municipio: firstOf(endTom, "CodigoMunicipio", "Municipio"),
+            uf: firstOf(endTom, "Uf"),
+            cep: fmtCep(firstOf(endTom, "Cep")),
+            email: firstOf(tom, "Contato.Email", "Email"),
         },
         servico: {
-            descricao: pickTag(servicoBlock, "Discriminacao") || "-",
-            codigoLc116: pickTag(servicoBlock, "ItemListaServico") || "-",
-            codigoMunicipio: pickTag(servicoBlock, "CodigoCnae") || pickTag(servicoBlock, "CodigoTributacaoMunicipio") || "-",
-            municipioPrestacao: pickTag(servicoBlock, "MunicipioPrestacaoServico") || pickTag(servicoBlock, "CodigoMunicipio") || "-",
+            descricao: firstOf(serv, "Discriminacao"),
+            itemLista: firstOf(serv, "ItemListaServico"),
+            codigoCnae: firstOf(serv, "CodigoCnae"),
+            codigoTribMunicipio: firstOf(serv, "CodigoTributacaoMunicipio"),
+            municipioPrestacao: firstOf(serv, "CodigoMunicipio", "MunicipioPrestacaoServico"),
         },
         valores: {
-            servicos: fmtMoeda(pickTag(valoresBlock, "ValorServicos")),
-            iss: fmtMoeda(pickTag(valoresBlock, "ValorIss")),
-            issRetido: pickTag(valoresBlock, "IssRetido") === "1" ? "Sim" : "Não",
-            aliquota: pickTag(valoresBlock, "Aliquota") || "-",
-            baseCalculo: fmtMoeda(pickTag(valoresBlock, "BaseCalculo")),
-            valorLiquido: fmtMoeda(pickTag(valoresBlock, "ValorLiquidoNfse") || pickTag(valoresBlock, "ValorServicos")),
-            pis: fmtMoeda(pickTag(valoresBlock, "ValorPis")),
-            cofins: fmtMoeda(pickTag(valoresBlock, "ValorCofins")),
-            inss: fmtMoeda(pickTag(valoresBlock, "ValorInss")),
-            ir: fmtMoeda(pickTag(valoresBlock, "ValorIr")),
-            csll: fmtMoeda(pickTag(valoresBlock, "ValorCsll")),
+            servicos: Number(firstOf(val, "ValorServicos")) || 0,
+            iss: Number(firstOf(val, "ValorIss")) || 0,
+            issRetido: firstOf(val, "IssRetido"),
+            aliquota: firstOf(val, "Aliquota"),
+            baseCalculo: Number(firstOf(val, "BaseCalculo")) || 0,
+            valorLiquido: Number(firstOf(val, "ValorLiquidoNfse")) || Number(firstOf(val, "ValorServicos")) || 0,
+            pis: Number(firstOf(val, "ValorPis")) || 0,
+            cofins: Number(firstOf(val, "ValorCofins")) || 0,
+            inss: Number(firstOf(val, "ValorInss")) || 0,
+            ir: Number(firstOf(val, "ValorIr")) || 0,
+            csll: Number(firstOf(val, "ValorCsll")) || 0,
+            deducoes: Number(firstOf(val, "ValorDeducoes")) || 0,
+            outras: Number(firstOf(val, "OutrasRetencoes")) || 0,
+        },
+        orgaoGerador: {
+            municipio: firstOf(inf, "OrgaoGerador.CodigoMunicipio"),
+            uf: firstOf(inf, "OrgaoGerador.Uf"),
         },
     };
 }
@@ -114,81 +185,129 @@ function parseAbrasf(xml) {
 /**
  * Gera PDF DANFSe ABRASF e retorna Buffer.
  */
-export async function gerarDanfseAbrasf(xml) {
-    const dados = parseAbrasf(xml);
+export async function gerarDanfseAbrasf(xmlString) {
+    const root = parser.parse(xmlString);
+    const d = extrairDados(root);
 
     return await new Promise((resolve, reject) => {
         try {
-            const doc = new PDFDocument({ size: "A4", margin: 32 });
+            const doc = new PDFDocument({ size: "A4", margin: 30 });
             const chunks = [];
             doc.on("data", (c) => chunks.push(c));
             doc.on("end", () => resolve(Buffer.concat(chunks)));
             doc.on("error", reject);
 
-            // Cabeçalho
-            doc.fontSize(14).font("Helvetica-Bold")
-                .text("DOCUMENTO AUXILIAR DA NFS-e", { align: "center" });
+            const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+            const left = doc.page.margins.left;
+
+            // ── Cabeçalho ─────────────────────────────────────────────
+            doc.rect(left, doc.y, pageW, 60).stroke();
+            const headY = doc.y;
+            doc.fontSize(11).font("Helvetica-Bold").fillColor("#000")
+                .text("PREFEITURA MUNICIPAL", left + 8, headY + 8, { width: pageW - 16, align: "center" });
+            doc.fontSize(13).font("Helvetica-Bold")
+                .text("NOTA FISCAL DE SERVIÇOS ELETRÔNICA — NFS-e", left + 8, headY + 25, { width: pageW - 16, align: "center" });
             doc.fontSize(8).font("Helvetica")
-                .text("Representação gráfica da NFS-e. Verifique a autenticidade pelo código no portal da prefeitura.",
-                    { align: "center" });
-            doc.moveDown(0.5);
+                .text("Documento Auxiliar — Verifique a autenticidade no portal da prefeitura",
+                    left + 8, headY + 45, { width: pageW - 16, align: "center" });
+            doc.y = headY + 65;
 
-            // Caixa de cabeçalho com número + código verificação
-            const headerY = doc.y;
-            doc.rect(32, headerY, 530, 50).stroke();
-            doc.fontSize(8).font("Helvetica-Bold").text("NÚMERO DA NFS-e", 40, headerY + 6);
-            doc.fontSize(14).font("Helvetica-Bold").text(dados.numero, 40, headerY + 18);
-            doc.fontSize(8).font("Helvetica-Bold").text("CÓDIGO DE VERIFICAÇÃO", 200, headerY + 6);
-            doc.fontSize(11).font("Helvetica").text(dados.codigoVerificacao, 200, headerY + 20);
-            doc.fontSize(8).font("Helvetica-Bold").text("DATA DE EMISSÃO", 380, headerY + 6);
-            doc.fontSize(11).font("Helvetica").text(dados.dataEmissao, 380, headerY + 20);
-            doc.fontSize(8).font("Helvetica-Bold").text("COMPETÊNCIA", 480, headerY + 6);
-            doc.fontSize(10).font("Helvetica").text(dados.competencia, 480, headerY + 20);
-            doc.y = headerY + 55;
+            // ── Identificação da NFS-e ────────────────────────────────
+            caixaTopo(doc, left, pageW, [
+                { label: "NÚMERO DA NFS-e", valor: d.numero || "-", w: 0.20, big: true },
+                { label: "CÓDIGO DE VERIFICAÇÃO", valor: d.codigoVerificacao || "-", w: 0.27 },
+                { label: "DATA E HORA DE EMISSÃO", valor: d.dataEmissao || "-", w: 0.27 },
+                { label: "COMPETÊNCIA", valor: d.competencia || "-", w: 0.26 },
+            ]);
 
-            // Prestador
-            secao(doc, "PRESTADOR DOS SERVIÇOS");
-            linha(doc, "CNPJ", dados.prestador.cnpj, "INSCRIÇÃO MUNICIPAL", dados.prestador.im);
-            linha(doc, "RAZÃO SOCIAL", dados.prestador.razao);
-            if (dados.prestador.nomeFantasia) linha(doc, "NOME FANTASIA", dados.prestador.nomeFantasia);
-            linha(doc, "ENDEREÇO",
-                `${dados.prestador.endereco}, ${dados.prestador.numero} — ${dados.prestador.bairro} — ${dados.prestador.uf} — CEP ${dados.prestador.cep}`);
+            // ── Prestador ─────────────────────────────────────────────
+            secaoTitulo(doc, left, pageW, "PRESTADOR DOS SERVIÇOS");
+            caixa(doc, left, pageW, [
+                [{ label: "CPF/CNPJ", valor: d.prestador.cnpj, w: 0.5 }, { label: "INSCRIÇÃO MUNICIPAL", valor: d.prestador.im || "-", w: 0.5 }],
+                [{ label: "NOME / RAZÃO SOCIAL", valor: d.prestador.razao || "-", w: 1 }],
+                d.prestador.nomeFantasia ? [{ label: "NOME FANTASIA", valor: d.prestador.nomeFantasia, w: 1 }] : null,
+                [{ label: "ENDEREÇO", valor: montarEndereco(d.prestador), w: 1 }],
+                [
+                    { label: "MUNICÍPIO", valor: d.prestador.municipio || "-", w: 0.4 },
+                    { label: "UF", valor: d.prestador.uf || "-", w: 0.15 },
+                    { label: "CEP", valor: d.prestador.cep, w: 0.25 },
+                    { label: "TELEFONE", valor: d.prestador.telefone || "-", w: 0.2 },
+                ],
+                d.prestador.email ? [{ label: "E-MAIL", valor: d.prestador.email, w: 1 }] : null,
+            ].filter(Boolean));
 
-            // Tomador
-            secao(doc, "TOMADOR DOS SERVIÇOS");
-            linha(doc, "CNPJ/CPF", dados.tomador.cnpj, "INSCRIÇÃO MUNICIPAL", dados.tomador.im || "-");
-            linha(doc, "RAZÃO SOCIAL / NOME", dados.tomador.razao);
-            linha(doc, "ENDEREÇO",
-                `${dados.tomador.endereco}, ${dados.tomador.numero} — ${dados.tomador.bairro} — ${dados.tomador.uf} — CEP ${dados.tomador.cep}`);
-            if (dados.tomador.email) linha(doc, "E-MAIL", dados.tomador.email);
+            // ── Tomador ───────────────────────────────────────────────
+            secaoTitulo(doc, left, pageW, "TOMADOR DOS SERVIÇOS");
+            caixa(doc, left, pageW, [
+                [{ label: "CPF/CNPJ", valor: d.tomador.cnpjCpf, w: 0.5 }, { label: "INSCRIÇÃO MUNICIPAL", valor: d.tomador.im || "-", w: 0.5 }],
+                [{ label: "NOME / RAZÃO SOCIAL", valor: d.tomador.razao || "-", w: 1 }],
+                [{ label: "ENDEREÇO", valor: montarEndereco(d.tomador), w: 1 }],
+                [
+                    { label: "MUNICÍPIO", valor: d.tomador.municipio || "-", w: 0.4 },
+                    { label: "UF", valor: d.tomador.uf || "-", w: 0.15 },
+                    { label: "CEP", valor: d.tomador.cep, w: 0.45 },
+                ],
+                d.tomador.email ? [{ label: "E-MAIL", valor: d.tomador.email, w: 1 }] : null,
+            ].filter(Boolean));
 
-            // Serviço
-            secao(doc, "DISCRIMINAÇÃO DO SERVIÇO");
-            doc.fontSize(10).font("Helvetica");
-            doc.text(dados.servico.descricao, 40, doc.y, { width: 520 });
-            doc.moveDown(0.5);
-            linha(doc, "CÓDIGO LC 116", dados.servico.codigoLc116, "CÓD. MUNICÍPIO", dados.servico.codigoMunicipio);
+            // ── Discriminação ─────────────────────────────────────────
+            secaoTitulo(doc, left, pageW, "DISCRIMINAÇÃO DOS SERVIÇOS");
+            const descTexto = d.servico.descricao || "-";
+            const descLines = doc.heightOfString(descTexto, { width: pageW - 16, fontSize: 10 });
+            const descBoxH = Math.max(36, descLines + 14);
+            doc.rect(left, doc.y, pageW, descBoxH).stroke();
+            doc.fontSize(10).font("Helvetica").fillColor("#000")
+                .text(descTexto, left + 8, doc.y + 7, { width: pageW - 16 });
+            doc.y = doc.y + descBoxH - descLines - 7 + descBoxH; // ajusta cursor
 
-            // Valores
-            secao(doc, "VALORES");
-            linha(doc, "VALOR DOS SERVIÇOS", dados.valores.servicos, "BASE DE CÁLCULO", dados.valores.baseCalculo);
-            linha(doc, "ALÍQUOTA (%)", dados.valores.aliquota, "VALOR DO ISS", dados.valores.iss);
-            linha(doc, "ISS RETIDO", dados.valores.issRetido, "VALOR LÍQUIDO", dados.valores.valorLiquido);
+            caixa(doc, left, pageW, [
+                [
+                    { label: "CÓDIGO LC 116", valor: d.servico.itemLista || "-", w: 0.25 },
+                    { label: "CÓD. TRIBUTAÇÃO MUNICÍPIO", valor: d.servico.codigoTribMunicipio || "-", w: 0.35 },
+                    { label: "CNAE", valor: d.servico.codigoCnae || "-", w: 0.20 },
+                    { label: "MUNICÍPIO PRESTAÇÃO", valor: d.servico.municipioPrestacao || "-", w: 0.20 },
+                ],
+            ]);
 
-            // Retenções (se houver)
-            const temRetencao = [dados.valores.pis, dados.valores.cofins, dados.valores.inss, dados.valores.ir, dados.valores.csll]
-                .some((v) => v && v !== fmtMoeda(0) && v !== "-");
-            if (temRetencao) {
-                secao(doc, "RETENÇÕES FEDERAIS");
-                linha(doc, "PIS", dados.valores.pis, "COFINS", dados.valores.cofins);
-                linha(doc, "INSS", dados.valores.inss, "IR", dados.valores.ir);
-                linha(doc, "CSLL", dados.valores.csll);
+            // ── Valores ───────────────────────────────────────────────
+            secaoTitulo(doc, left, pageW, "VALORES");
+            caixa(doc, left, pageW, [
+                [
+                    { label: "VALOR DOS SERVIÇOS", valor: fmtMoeda(d.valores.servicos), w: 0.25, destaque: true },
+                    { label: "BASE DE CÁLCULO", valor: fmtMoeda(d.valores.baseCalculo || d.valores.servicos), w: 0.25 },
+                    { label: "ALÍQUOTA", valor: fmtAliquota(d.valores.aliquota), w: 0.20 },
+                    { label: "VALOR DO ISS", valor: fmtMoeda(d.valores.iss), w: 0.30 },
+                ],
+                [
+                    { label: "DEDUÇÕES", valor: fmtMoeda(d.valores.deducoes), w: 0.25 },
+                    { label: "OUTRAS RETENÇÕES", valor: fmtMoeda(d.valores.outras), w: 0.25 },
+                    { label: "ISS RETIDO", valor: String(d.valores.issRetido) === "1" ? "SIM" : "NÃO", w: 0.20 },
+                    { label: "VALOR LÍQUIDO", valor: fmtMoeda(d.valores.valorLiquido), w: 0.30, destaque: true },
+                ],
+            ]);
+
+            // ── Retenções federais (se houver) ────────────────────────
+            const temRet = (d.valores.pis + d.valores.cofins + d.valores.inss + d.valores.ir + d.valores.csll) > 0;
+            if (temRet) {
+                secaoTitulo(doc, left, pageW, "RETENÇÕES FEDERAIS");
+                caixa(doc, left, pageW, [
+                    [
+                        { label: "PIS", valor: fmtMoeda(d.valores.pis), w: 0.2 },
+                        { label: "COFINS", valor: fmtMoeda(d.valores.cofins), w: 0.2 },
+                        { label: "INSS", valor: fmtMoeda(d.valores.inss), w: 0.2 },
+                        { label: "IR", valor: fmtMoeda(d.valores.ir), w: 0.2 },
+                        { label: "CSLL", valor: fmtMoeda(d.valores.csll), w: 0.2 },
+                    ],
+                ]);
             }
 
-            // Rodapé
-            doc.moveDown(1);
+            // ── Rodapé ────────────────────────────────────────────────
+            doc.moveDown(0.8);
             doc.fontSize(7).font("Helvetica-Oblique").fillColor("#666")
-                .text("Gerado por PacNoBolso — pacnobolso.com.br", { align: "center" });
+                .text(`Código de verificação: ${d.codigoVerificacao || "-"}`,
+                    left, doc.y, { width: pageW, align: "center" });
+            doc.text("Gerado por PacNoBolso — pacnobolso.com.br",
+                left, doc.y + 2, { width: pageW, align: "center" });
 
             doc.end();
         } catch (err) {
@@ -197,25 +316,65 @@ export async function gerarDanfseAbrasf(xml) {
     });
 }
 
-function secao(doc, titulo) {
-    doc.moveDown(0.4);
-    doc.fontSize(9).font("Helvetica-Bold").fillColor("#000")
-        .text(titulo, 40, doc.y);
-    doc.moveTo(32, doc.y + 1).lineTo(562, doc.y + 1).stroke();
-    doc.moveDown(0.3);
+function montarEndereco(p) {
+    const partes = [p.logradouro, p.numero, p.complemento, p.bairro].filter((x) => x && String(x).trim());
+    return partes.length ? partes.join(", ") : "-";
 }
 
-function linha(doc, label1, valor1, label2, valor2) {
+function secaoTitulo(doc, left, pageW, titulo) {
+    doc.moveDown(0.3);
+    doc.fillColor("#000").fontSize(8).font("Helvetica-Bold")
+        .text(titulo, left + 4, doc.y, { width: pageW - 8 });
+    doc.moveDown(0.1);
+}
+
+function caixaTopo(doc, left, pageW, campos) {
+    const h = 38;
     const y = doc.y;
-    doc.fontSize(7).font("Helvetica-Bold").fillColor("#555")
-        .text(label1, 40, y);
-    doc.fontSize(10).font("Helvetica").fillColor("#000")
-        .text(valor1 || "-", 40, y + 10, { width: label2 ? 250 : 520 });
-    if (label2) {
+    doc.rect(left, y, pageW, h).stroke();
+    let x = left;
+    campos.forEach((c, i) => {
+        const w = pageW * c.w;
+        if (i > 0) doc.moveTo(x, y).lineTo(x, y + h).stroke();
         doc.fontSize(7).font("Helvetica-Bold").fillColor("#555")
-            .text(label2, 300, y);
-        doc.fontSize(10).font("Helvetica").fillColor("#000")
-            .text(valor2 || "-", 300, y + 10, { width: 260 });
-    }
-    doc.y = y + 24;
+            .text(c.label, x + 4, y + 4, { width: w - 8 });
+        doc.fontSize(c.big ? 14 : 10).font(c.big ? "Helvetica-Bold" : "Helvetica").fillColor("#000")
+            .text(c.valor, x + 4, y + 16, { width: w - 8 });
+        x += w;
+    });
+    doc.y = y + h + 2;
+}
+
+function caixa(doc, left, pageW, linhas) {
+    const padY = 4;
+    let y = doc.y;
+    const linhasH = linhas.map((linha) => {
+        let max = 0;
+        for (const c of linha) {
+            const w = pageW * c.w - 8;
+            const valor = String(c.valor || "-");
+            const h = doc.heightOfString(valor, { width: w, fontSize: c.destaque ? 11 : 10 });
+            max = Math.max(max, h);
+        }
+        return max + 18; // label + valor + padding
+    });
+    const totalH = linhasH.reduce((a, b) => a + b, 0);
+    doc.rect(left, y, pageW, totalH).stroke();
+
+    let curY = y;
+    linhas.forEach((linha, li) => {
+        let x = left;
+        if (li > 0) doc.moveTo(left, curY).lineTo(left + pageW, curY).stroke();
+        linha.forEach((c, ci) => {
+            const w = pageW * c.w;
+            if (ci > 0) doc.moveTo(x, curY).lineTo(x, curY + linhasH[li]).stroke();
+            doc.fontSize(7).font("Helvetica-Bold").fillColor("#555")
+                .text(c.label, x + 4, curY + 3, { width: w - 8 });
+            doc.fontSize(c.destaque ? 11 : 10).font(c.destaque ? "Helvetica-Bold" : "Helvetica").fillColor("#000")
+                .text(String(c.valor || "-"), x + 4, curY + 13, { width: w - 8 });
+            x += w;
+        });
+        curY += linhasH[li];
+    });
+    doc.y = y + totalH + padY;
 }
