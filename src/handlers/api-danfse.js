@@ -22,16 +22,21 @@ import { logger } from "../utils/logger.js";
 
 /**
  * Detecta formato do XML retornado pela Focus.
- * Nacional 1.01 usa tag <NFSe> ou <DPS> (LC 214/2025);
- * ABRASF 1.x/2.x usa <CompNfse>, <Nfse>, <InfNfse>, <Rps>.
+ * Marcadores EXCLUSIVOS:
+ *   ABRASF v2.x → tag <CompNfse>; Goiânia/Aparecida usam isso
+ *   ABRASF v1.x → tag <Rps> sem <DPS>
+ *   Nacional 1.01 (LC 214/2025) → tag <DPS> ou <infDPS>
+ * Case-sensitive de propósito: <InfNfse> (ABRASF) ≠ <infNFSe> (Nacional).
+ * Ordem importa: ABRASF é checado antes pra evitar falso positivo.
  */
 function detectarFormatoXml(xml) {
     if (!xml) return "desconhecido";
-    if (/<\s*(?:[\w-]+:)?DPS[\s>]/i.test(xml)) return "nacional";
-    if (/<\s*(?:[\w-]+:)?infNFSe[\s>]/i.test(xml)) return "nacional";
-    if (/<\s*(?:[\w-]+:)?CompNfse[\s>]/i.test(xml)) return "abrasf";
-    if (/<\s*(?:[\w-]+:)?InfNfse[\s>]/i.test(xml)) return "abrasf";
-    if (/<\s*(?:[\w-]+:)?Rps[\s>]/i.test(xml)) return "abrasf";
+    if (/<\s*(?:[\w-]+:)?CompNfse[\s>]/.test(xml)) return "abrasf";
+    if (/<\s*(?:[\w-]+:)?InfNfse[\s>]/.test(xml)) return "abrasf";
+    if (/<\s*(?:[\w-]+:)?DPS[\s>]/.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?infDPS[\s>]/.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?infNFSe[\s>]/.test(xml)) return "nacional";
+    if (/<\s*(?:[\w-]+:)?Rps[\s>]/.test(xml)) return "abrasf";
     return "desconhecido";
 }
 
