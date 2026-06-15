@@ -37,8 +37,31 @@ function statusFromPayload(body) {
 }
 
 function formatarMensagemNotaEmitida(nota, numeroFmt) {
-    const valor = Number(nota.valor_total || 0).toFixed(2);
-    return `✅ Nota emitida!\nNúmero: ${numeroFmt}\nValor: R$ ${valor}`;
+    const valor = Number(nota.valor_total || 0)
+        .toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    return `🎉 *Nota nº ${numeroFmt} autorizada!*\n💰 ${valor}`;
+}
+
+function formatarMensagemSemPdfBinario(nota, numeroFmt, codVerif, urlPortal) {
+    const cabecalho = formatarMensagemNotaEmitida(nota, numeroFmt);
+    const partes = [cabecalho, ""];
+    if (urlPortal) {
+        partes.push(
+            "📄 *PDF da nota* (página oficial da prefeitura):",
+            urlPortal,
+        );
+    }
+    if (codVerif) {
+        partes.push(
+            "",
+            `🔐 Código de verificação: *${codVerif}*`,
+        );
+    }
+    partes.push(
+        "",
+        "_Esse município entrega o PDF pela página da prefeitura, não como arquivo direto. Clica no link acima pra ver ou baixar._",
+    );
+    return partes.join("\n");
 }
 
 export async function handleFocusWebhook(body) {
@@ -107,10 +130,13 @@ export async function handleFocusWebhook(body) {
         }).catch((err) => logger.warn({ err: err.message }, "focus-webhook: falha atualizando Supabase"));
 
         if (conversa?.whatsapp) {
-            // Focus envia URL do PDF no payload (`url` ou `url_danfse`). Quando
-            // disponível, usar S3 direto evita race condition do endpoint
-            // /v2/nfse/<ref>.pdf que pode retornar antes da Focus terminar
-            // de gerar o arquivo.
+            // Focus envia URL do "PDF" no payload (`url` ou `url_danfse`).
+            // Pra NFSe Nacional/ISSNET (Aparecida), essa URL é uma PÁGINA HTML
+            // do portal da prefeitura (issnetonline.com.br/.../*.aspx), não
+            // PDF binário. Tentamos baixar como PDF mesmo — se vier HTML,
+            // baixarPdf valida magic bytes e lança erro. No catch caímos pra
+            // fallback que MANDA O LINK como página, que é o que cliente
+            // precisa pra ver/imprimir a nota.
             const urlPdfPayload = body.url || body.url_danfse || null;
             try {
                 const pdfBuffer = await baixarPdf(
@@ -126,13 +152,24 @@ export async function handleFocusWebhook(body) {
                     formatarMensagemNotaEmitida(nota, numero)
                 );
             } catch (err) {
-                logger.error({ err: err.message, referencia }, "focus-webhook: erro baixando/enviando PDF");
-                // Fallback: manda texto com link direto pro PDF (se a Focus mandou)
-                const linhaLink = urlPdfPayload ? `\nPDF: ${urlPdfPayload}` : "";
-                await enviarTexto(
-                    conversa.whatsapp,
-                    `${formatarMensagemNotaEmitida(nota, numero)}\nCódigo de verificação: ${codVerif || "—"}${linhaLink}`
-                ).catch(() => {});
+                logger.warn(
+                    { err: err.message, referencia, urlPdfPayload },
+                    "focus-webhook: PDF binário indisponível, mandando link do portal"
+                );
+                // Fallback enriquecido: mensagem carismática com link clicável
+                // pra página oficial da prefeitura + código de verificação.
+                if (urlPdfPayload) {
+                    await enviarTexto(
+                        conversa.whatsapp,
+                        formatarMensagemSemPdfBinario(nota, numero, codVerif, urlPdfPayload)
+                    ).catch(() => {});
+                } else {
+                    // Sem URL nenhuma — mensagem mínima com código de verificação.
+                    await enviarTexto(
+                        conversa.whatsapp,
+                        `${formatarMensagemNotaEmitida(nota, numero)}\n🔐 Código: ${codVerif || "—"}\n\n_Veja o PDF no painel pacnobolso.com.br/fiscal._`
+                    ).catch(() => {});
+                }
             }
             finalizarConversa.run("finalizada", conversa.id);
         }
@@ -159,9 +196,11 @@ export async function handleFocusWebhook(body) {
         }).catch((err) => logger.warn({ err: err.message }, "focus-webhook: falha atualizando Supabase"));
 
         if (conversa?.whatsapp) {
+            const acao = novoStatus === "cancelado" ? "cancelou" : "rejeitou";
             await enviarTexto(
                 conversa.whatsapp,
-                `❌ A SEFAZ ${novoStatus === "cancelado" ? "cancelou" : "rejeitou"} a emissão: ${motivo}\n\nVou avisar a equipe pra investigar.`
+                `⚠️ A prefeitura ${acao} a emissão:\n\n_${motivo}_\n\n` +
+                `Não esquenta — já chamei minha equipe técnica pra ver o que rolou. A gente resolve.`
             );
             finalizarConversa.run("finalizada", conversa.id);
         }
