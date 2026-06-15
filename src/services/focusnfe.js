@@ -508,8 +508,22 @@ export async function baixarXml(referencia, focusToken, empresa, urlPayload) {
     const auth = Buffer.from(`${focusToken}:`).toString("base64");
     const authHeaders = { Authorization: `Basic ${auth}` };
 
+    // urlPayload da Focus costuma vir como path relativo (/arquivos/...)
+    // — prefixa BASE_URL e usa auth Basic do token da empresa.
+    let urlPayloadAbsoluta = null;
+    let payloadHeaders = {};
+    if (typeof urlPayload === "string" && urlPayload.length > 0) {
+        if (urlPayload.startsWith("/")) {
+            urlPayloadAbsoluta = `${BASE_URL}${urlPayload}`;
+            payloadHeaders = authHeaders;
+        } else if (urlPayload.startsWith("http")) {
+            urlPayloadAbsoluta = urlPayload;
+            // URL absoluta da Focus (S3 assinado): não precisa Authorization
+        }
+    }
+
     const tentativas = [
-        { url: urlPayload, headers: {}, label: "url_payload" },
+        { url: urlPayloadAbsoluta, headers: payloadHeaders, label: "url_payload" },
         { url: urlFocus, headers: authHeaders, label: "focus_xml_endpoint" },
     ].filter((t) => !!t.url);
 
