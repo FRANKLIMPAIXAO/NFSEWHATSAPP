@@ -9,6 +9,7 @@ import { handleWebhook } from "./handlers/webhook.js";
 import { handleFocusWebhook } from "./handlers/focus-webhook.js";
 import { handleApiEmit } from "./handlers/api-emit.js";
 import { handleApiDanfse } from "./handlers/api-danfse.js";
+import { handleApiEnviarNfseWhatsapp } from "./handlers/api-enviar-nfse-whatsapp.js";
 import { handleApiCobrar } from "./handlers/api-cobrar.js";
 import { handleApiCobrarAssinante } from "./handlers/api-cobrar-assinante.js";
 import { iniciarCronCobrancas, executarCicloCobrancas } from "./jobs/cobrancas-cron.js";
@@ -131,6 +132,13 @@ app.post("/api/emit", async (req, res) => {
 app.get("/api/danfse/:ref", async (req, res) => {
     aplicarCorsApi(req, res);
     await handleApiDanfse(req, res);
+});
+
+// API HTTP — envia DANFSe pelo WhatsApp do dono da empresa. Botão
+// "Enviar no Zap" do painel quando o webhook automático falhou.
+app.post("/api/enviar-nfse-whatsapp/:ref", async (req, res) => {
+    aplicarCorsApi(req, res);
+    await handleApiEnviarNfseWhatsapp(req, res);
 });
 
 // API HTTP — cobrança via WhatsApp. Dispara lembrete pro whatsapp_dono
