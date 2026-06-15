@@ -18,6 +18,11 @@
 import { supabase } from "../supabase.js";
 import { enviarTexto } from "../services/whatsapp.js";
 import { extrairTransacao } from "../services/financeiro-extractor.js";
+import {
+    insertConversa,
+    updateConversa,
+    finalizarConversa,
+} from "../db/index.js";
 import { logger } from "../utils/logger.js";
 
 function fmtBRL(v) {
@@ -101,7 +106,19 @@ async function acumuladoMes(userId, categoryId, type) {
  * Entry point — chamado quando classificador diz subtipo=pagamento_efetuado
  * ou recebimento ou outro (transação genérica).
  */
-export async function handleFinanceiroTransacao({ empresa, numero, texto, imagens, pdf }) {
+/**
+ * @param {Object} args
+ * @param {Object} args.empresa
+ * @param {string} args.numero
+ * @param {string} args.texto
+ * @param {Array}  args.imagens
+ * @param {Object} args.pdf
+ * @param {Object} [args.conversaAtiva] - conversa financeira em andamento
+ *   (estado=financeiro_aguardando_dados) com payload_json contendo
+ *   extração parcial anterior. Quando presente, o extractor mescla
+ *   a nova mensagem com os campos já preenchidos.
+ */
+export async function handleFinanceiroTransacao({ empresa, numero, texto, imagens, pdf, conversaAtiva }) {
     const userId = empresa.user_id || empresa._supabaseUserId;
     if (!userId) {
         logger.warn({ empresaId: empresa.id }, "financeiro-transacao: empresa sem user_id");
@@ -111,7 +128,12 @@ export async function handleFinanceiroTransacao({ empresa, numero, texto, imagen
         return { ok: true };
     }
 
-    const extracao = await extrairTransacao({ texto, imagens, pdf, empresa });
+    // Carrega payload anterior se for continuação de conversa
+    const payloadAnterior = conversaAtiva?.payload_json
+        ? JSON.parse(conversaAtiva.payload_json)
+        : null;
+
+    const extracao = await extrairTransacao({ texto, imagens, pdf, empresa, payloadAnterior });
 
     if (extracao.status === "not_transacao") {
         logger.info(
@@ -127,6 +149,26 @@ export async function handleFinanceiroTransacao({ empresa, numero, texto, imagen
         }
         const pergunta = extracao.pergunta ||
             `🤔 Faltou: *${(extracao.campos_faltantes || []).join(", ")}*. Me manda?`;
+
+        // Salva/atualiza conversa pra próxima mensagem do user CONTINUAR
+        // de onde parou (sem cair de novo no classificador).
+        const payloadJSON = JSON.stringify(extracao);
+        if (conversaAtiva) {
+            updateConversa.run(
+                "financeiro_aguardando_dados",
+                payloadJSON,
+                JSON.stringify(extracao.campos_faltantes || []),
+                conversaAtiva.id,
+            );
+        } else {
+            insertConversa.run(
+                empresa.id,
+                numero,
+                "financeiro_aguardando_dados",
+                payloadJSON,
+                JSON.stringify(extracao.campos_faltantes || []),
+            );
+        }
         await enviarTexto(numero, pergunta);
         return { ok: true };
     }
@@ -185,6 +227,12 @@ export async function handleFinanceiroTransacao({ empresa, numero, texto, imagen
             categoriaTxt +
             sufixoAcumulado
         );
+
+        // Fecha a conversa financeira (se houver) — próxima mensagem
+        // começa do zero pelo classificador.
+        if (conversaAtiva) {
+            finalizarConversa.run("finalizada", conversaAtiva.id);
+        }
 
         logger.info(
             {

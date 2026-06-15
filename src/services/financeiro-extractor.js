@@ -112,7 +112,7 @@ DEVOLVA APENAS JSON, sem markdown:
  * menciona a data explicitamente (e sem dia ele inventa anos antigos ou
  * datas futuras). Default deve ser HOJE quando ambíguo.
  */
-function montarContentBlocks({ texto, imagens, pdf }) {
+function montarContentBlocks({ texto, imagens, pdf, payloadAnterior }) {
     const hojeISO = new Date().toISOString().slice(0, 10);
     const hojeBR = new Date().toLocaleDateString("pt-BR", {
         weekday: "long",
@@ -139,6 +139,20 @@ function montarContentBlocks({ texto, imagens, pdf }) {
             },
         });
     }
+
+    // Quando é continuação de conversa, mostra o que JÁ EXTRAÍMOS na
+    // mensagem anterior + a nova mensagem do user. LLM mescla pra
+    // completar.
+    const cabecalhoContinuacao = payloadAnterior
+        ? `⚠️ CONTINUAÇÃO DE CONVERSA\n` +
+          `Na mensagem anterior você extraiu parcialmente:\n` +
+          `${JSON.stringify(payloadAnterior, null, 2)}\n\n` +
+          `Status era "incomplete". A nova mensagem do user abaixo é a ` +
+          `RESPOSTA à pergunta de complemento. MESCLE os campos antigos ` +
+          `com a nova info. Mantenha tudo que já estava preenchido, ` +
+          `complete o que faltava, e retorne status="ok" se tiver tudo.\n\n`
+        : "";
+
     blocks.push({
         type: "text",
         text:
@@ -147,6 +161,7 @@ function montarContentBlocks({ texto, imagens, pdf }) {
             `"ontem" use ${hojeISO} -1 dia, "amanhã" use +1 dia, etc. ` +
             `Se NÃO mencionar data NENHUMA, use a data de HOJE acima — ` +
             `NUNCA invente uma data fora desse contexto.\n\n` +
+            cabecalhoContinuacao +
             `MENSAGEM DO USUÁRIO:\n${texto || "(sem texto — só mídia anexa)"}`,
     });
     return blocks;
@@ -210,9 +225,12 @@ export async function extrairBoleto({ texto, imagens, pdf }) {
  * @param {Array}  args.imagens - [{base64, mimetype}]
  * @param {Object} args.pdf - {base64}
  * @param {Object} args.empresa - empresa identificada (usado pra detectar income/expense em comprovante)
+ * @param {Object} [args.payloadAnterior] - extração parcial de mensagem anterior
+ *   (quando conversa estava em financeiro_aguardando_dados). O LLM mescla
+ *   com a nova mensagem pra completar o que faltava.
  */
-export async function extrairTransacao({ texto, imagens, pdf, empresa }) {
-    const blocks = montarContentBlocks({ texto, imagens, pdf });
+export async function extrairTransacao({ texto, imagens, pdf, empresa, payloadAnterior }) {
+    const blocks = montarContentBlocks({ texto, imagens, pdf, payloadAnterior });
 
     // Injeta nome/CNPJ da empresa no prompt
     const promptContextualizado = TRANSACAO_SYSTEM_PROMPT

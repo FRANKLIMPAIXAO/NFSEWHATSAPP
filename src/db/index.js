@@ -233,6 +233,16 @@ export const findConversaAtiva = db.prepare(`
 // 'aguardando_sefaz' (callback async pós-emissão) NÃO entram na query — uma
 // nova msg do dono nesse estado cria conversa nova (paralela).
 
+// Conversa FINANCEIRA aguardando complemento (ex: bot perguntou "no que
+// gastou?" e tá esperando "Restaurante"). Separada da NFSe pra não
+// confundir os handlers — cada tipo tem seu próprio estado intermediário.
+export const findConversaFinanceiraAtiva = db.prepare(`
+    SELECT * FROM conversas
+    WHERE empresa_id = ? AND whatsapp = ?
+      AND estado IN ('financeiro_aguardando_dados')
+    ORDER BY iniciada_em DESC LIMIT 1
+`);
+
 export const findConversaById = db.prepare(`
     SELECT * FROM conversas WHERE id = ?
 `);

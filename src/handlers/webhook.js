@@ -24,6 +24,7 @@ import fsSync from "node:fs";
 import {
     findEmpresaByWhatsapp,
     findConversaAtiva,
+    findConversaFinanceiraAtiva,
     insertConversa,
     updateConversa,
     finalizarConversa,
@@ -173,18 +174,26 @@ async function _handleWebhookInner(evt) {
 
     // ---------- 2. CONVERSA EM ANDAMENTO? ----------
     const conversaAtiva = findConversaAtiva.get(empresa.id, numero);
+    // Conversa financeira aguardando complemento (estado
+    // financeiro_aguardando_dados). Quando existir, vamos PULAR o
+    // classificador e ir direto pro handleFinanceiroTransacao com o
+    // payload parcial anterior — assim "Restaurante" como resposta ao
+    // "no que gastou?" mescla com o que já tinha (valor R$ 55).
+    const conversaFinanceira = findConversaFinanceiraAtiva.get(empresa.id, numero);
 
     // Comando "cancelar" do próprio dono — aborta a conversa em qualquer
     // estado intermediário. Não confunde com conteúdo da nota porque o
     // regex casa só a palavra sozinha.
     if (texto && CANCELAR_REGEX.test(texto.trim())) {
-        if (conversaAtiva) {
-            finalizarConversa.run("cancelada", conversaAtiva.id);
+        // Cancela qualquer conversa ativa (NFSe OU financeira)
+        const algumaConversa = conversaAtiva || conversaFinanceira;
+        if (algumaConversa) {
+            finalizarConversa.run("cancelada", algumaConversa.id);
             await enviarTexto(
                 numero,
-                "👍 Cancelei aqui. Quando quiser recomeçar, manda áudio, foto ou descreve o serviço por texto."
+                "👍 Cancelei aqui. Quando quiser recomeçar, manda áudio, foto ou descreve por texto."
             );
-            logEvento("conversa_cancelada_dono", empresa.id, conversaAtiva.id, {});
+            logEvento("conversa_cancelada_dono", empresa.id, algumaConversa.id, {});
         } else {
             await enviarTexto(
                 numero,
@@ -319,6 +328,27 @@ async function _handleWebhookInner(evt) {
         textoExtracao = texto;
     } else {
         return; // tipo de mensagem que não interessa
+    }
+
+    // ---------- 4.4 CONVERSA FINANCEIRA EM CURSO? ----------
+    // Se conversa financeira está aguardando complemento, PULAMOS o
+    // classificador e mandamos direto pro handler financeiro com o
+    // payload anterior. Senão a próxima resposta curta do user (ex:
+    // "Restaurante" depois de "no que gastou os 55?") cai como
+    // duvida_geral.
+    if (conversaFinanceira && !conversaAtiva) {
+        await handleFinanceiroTransacao({
+            empresa,
+            numero,
+            texto: textoExtracao,
+            imagens: imagensExtracao,
+            pdf: pdfExtracao,
+            conversaAtiva: conversaFinanceira,
+        });
+        for (const p of arquivosTemp) {
+            await fs.unlink(p).catch(() => {});
+        }
+        return;
     }
 
     // ---------- 4.5 CLASSIFICAR INTENÇÃO ----------
