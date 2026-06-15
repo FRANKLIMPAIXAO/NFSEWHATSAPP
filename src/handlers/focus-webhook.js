@@ -19,8 +19,9 @@
  */
 import { findNotaByReferencia, updateNotaStatus, findConversaById, findEmpresaById, finalizarConversa } from "../db/index.js";
 import { atualizarNotaResultado } from "../db/supabase-nota-repo.js";
-import { baixarPdf } from "../services/focusnfe.js";
+import { baixarPdf, baixarXml } from "../services/focusnfe.js";
 import { enviarPdf, enviarTexto } from "../services/whatsapp.js";
+import { DanfeService } from "nfse-nacional";
 import { logger } from "../utils/logger.js";
 
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP;
@@ -138,6 +139,10 @@ export async function handleFocusWebhook(body) {
             // fallback que MANDA O LINK como página, que é o que cliente
             // precisa pra ver/imprimir a nota.
             const urlPdfPayload = body.url || body.url_danfse || null;
+            // 1ª tentativa: PDF binário direto da Focus (funciona pra NFe/NFCe
+            // e alguns municípios NFSe; falha em ISSNET/Aparecida que entrega
+            // só HTML do portal)
+            let pdfEnviado = false;
             try {
                 const pdfBuffer = await baixarPdf(
                     referencia,
@@ -151,26 +156,71 @@ export async function handleFocusWebhook(body) {
                     `NFS-e-${numero}.pdf`,
                     formatarMensagemNotaEmitida(nota, numero)
                 );
+                pdfEnviado = true;
             } catch (err) {
-                logger.warn(
-                    { err: err.message, referencia, urlPdfPayload },
-                    "focus-webhook: PDF binário indisponível, mandando link do portal"
+                logger.info(
+                    { err: err.message, referencia },
+                    "focus-webhook: PDF binário indisponível, tentando gerar DANFSe local"
                 );
-                // Fallback enriquecido: mensagem carismática com link clicável
-                // pra página oficial da prefeitura + código de verificação.
+            }
+
+            // 2ª tentativa: gerar DANFSe localmente a partir do XML autorizado.
+            // Mesma estratégia que o emissor EPN usa (services/danfe.js) — funciona
+            // pra NFSe Nacional 1.01 (Aparecida e outros municípios ISSNET).
+            if (!pdfEnviado) {
+                try {
+                    const urlXmlPayload = body.caminho_xml_nota_fiscal || body.url_xml || null;
+                    const xml = await baixarXml(referencia, empresa.focus_token, empresa, urlXmlPayload);
+                    const danfe = new DanfeService();
+                    const out = await Promise.race([
+                        danfe.generateFromXml(xml, { chaveAcesso: codVerif || numero }),
+                        new Promise((_, rej) =>
+                            setTimeout(() => rej(new Error("DANFSe timeout 15s")), 15000)
+                        ),
+                    ]);
+                    if (out?.pdfBytes) {
+                        await enviarPdf(
+                            conversa.whatsapp,
+                            Buffer.from(out.pdfBytes),
+                            `NFS-e-${numero}.pdf`,
+                            formatarMensagemNotaEmitida(nota, numero)
+                        );
+                        pdfEnviado = true;
+                        logger.info(
+                            { referencia, tamanho: out.pdfBytes.length },
+                            "focus-webhook: DANFSe local gerado e enviado"
+                        );
+                    } else {
+                        logger.warn(
+                            { referencia, hasHtml: !!out?.html },
+                            "focus-webhook: DanfeService não retornou pdfBytes"
+                        );
+                    }
+                } catch (err) {
+                    logger.warn(
+                        { err: err.message, referencia },
+                        "focus-webhook: falha gerando DANFSe local, caindo pro link"
+                    );
+                }
+            }
+
+            // 3ª tentativa (último recurso): link do portal da prefeitura.
+            // Usado quando PDF binário falhou E DANFSe local também falhou
+            // (XML indisponível ou DanfeService deu erro).
+            if (!pdfEnviado) {
                 if (urlPdfPayload) {
                     await enviarTexto(
                         conversa.whatsapp,
                         formatarMensagemSemPdfBinario(nota, numero, codVerif, urlPdfPayload)
                     ).catch(() => {});
                 } else {
-                    // Sem URL nenhuma — mensagem mínima com código de verificação.
                     await enviarTexto(
                         conversa.whatsapp,
                         `${formatarMensagemNotaEmitida(nota, numero)}\n🔐 Código: ${codVerif || "—"}\n\n_Veja o PDF no painel pacnobolso.com.br/fiscal._`
                     ).catch(() => {});
                 }
             }
+
             finalizarConversa.run("finalizada", conversa.id);
         }
         return { ok: true, status: "autorizado", numero };

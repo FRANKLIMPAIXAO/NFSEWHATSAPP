@@ -487,3 +487,65 @@ export async function baixarPdf(referencia, focusToken, empresa, urlPayload) {
         `Falha ao baixar PDF após 3 tentativas: ${ultimoErro?.message || "PDF inválido"}`
     );
 }
+
+/**
+ * Baixa XML autorizado da NFS-e na Focus. Usado pelo focus-webhook pra
+ * gerar DANFSe PDF local quando a Focus não entrega PDF binário (caso
+ * de NFSe Aparecida/ISSNET — entrega só link HTML do portal).
+ *
+ * Diferente do PDF: XML é texto, então retornamos string em vez de
+ * Buffer, e validamos com substring "<?xml" em vez de magic bytes.
+ *
+ * @param {string} referencia
+ * @param {string} focusToken
+ * @param {object} empresa
+ * @param {string} [urlPayload] - URL do XML vinda do webhook (opcional)
+ * @returns {Promise<string>} XML cru
+ */
+export async function baixarXml(referencia, focusToken, empresa, urlPayload) {
+    const basePath = basePathPara(resolverPadrao(empresa));
+    const urlFocus = `${BASE_URL}${basePath}/${encodeURIComponent(referencia)}.xml`;
+    const auth = Buffer.from(`${focusToken}:`).toString("base64");
+    const authHeaders = { Authorization: `Basic ${auth}` };
+
+    const tentativas = [
+        { url: urlPayload, headers: {}, label: "url_payload" },
+        { url: urlFocus, headers: authHeaders, label: "focus_xml_endpoint" },
+    ].filter((t) => !!t.url);
+
+    let ultimoErro = null;
+    for (let i = 0; i < 3; i++) {
+        for (const tent of tentativas) {
+            try {
+                const response = await fetch(tent.url, { headers: tent.headers });
+                if (!response.ok) {
+                    ultimoErro = new Error(`HTTP ${response.status}`);
+                    continue;
+                }
+                const texto = await response.text();
+                // XML válido começa com <?xml ou <Nfse ou similar
+                if (texto && texto.trim().startsWith("<")) {
+                    logger.info(
+                        { referencia, tamanho: texto.length, origem: tent.label, tentativa: i + 1 },
+                        "XML baixado"
+                    );
+                    return texto;
+                }
+                logger.warn(
+                    { referencia, tamanho: texto?.length || 0, origem: tent.label, tentativa: i + 1 },
+                    "resposta não parece XML, tentando próxima fonte/retry"
+                );
+            } catch (err) {
+                ultimoErro = err;
+                logger.warn(
+                    { referencia, origem: tent.label, tentativa: i + 1, err: err.message },
+                    "falha baixando XML, tentando próxima fonte/retry"
+                );
+            }
+        }
+        if (i < 2) await new Promise((r) => setTimeout(r, 2000 * (i + 1) * (i + 1)));
+    }
+    throw new Error(
+        `Falha ao baixar XML após 3 tentativas: ${ultimoErro?.message || "XML inválido"}`
+    );
+}
