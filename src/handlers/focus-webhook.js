@@ -18,7 +18,7 @@
  *   4. Se rejeitado/cancelado → mensagem ao cliente + avisa admin
  */
 import { findNotaByReferencia, updateNotaStatus, findConversaById, findEmpresaById, finalizarConversa } from "../db/index.js";
-import { atualizarNotaResultado } from "../db/supabase-nota-repo.js";
+import { atualizarNotaResultado, buscarNotaPorRef } from "../db/supabase-nota-repo.js";
 import { baixarPdf, baixarXml } from "../services/focusnfe.js";
 import { enviarPdf, enviarTexto } from "../services/whatsapp.js";
 import { DanfeService } from "nfse-nacional";
@@ -73,10 +73,43 @@ export async function handleFocusWebhook(body) {
         return { ok: false, reason: "no_ref" };
     }
 
-    const nota = findNotaByReferencia.get(referencia);
+    // Tenta SQLite local primeiro (rápido + pode ter conversa_id).
+    // Fallback: Supabase quando o agent reiniciou e perdeu o registro.
+    let nota = findNotaByReferencia.get(referencia);
+    let conversa = nota?.conversa_id ? findConversaById.get(nota.conversa_id) : null;
+    let empresa = nota ? findEmpresaById.get(nota.empresa_id) : null;
+    let fonteRemota = false;
+
     if (!nota) {
-        logger.warn({ referencia, body }, "focus-webhook: nota não encontrada localmente");
-        return { ok: false, reason: "nota_nao_encontrada" };
+        const remoto = await buscarNotaPorRef(referencia);
+        if (!remoto?.nota) {
+            logger.warn({ referencia, body }, "focus-webhook: nota não encontrada (SQLite nem Supabase)");
+            return { ok: false, reason: "nota_nao_encontrada" };
+        }
+        fonteRemota = true;
+        // Adapta row do Supabase pra mesma forma esperada pelo resto da função.
+        nota = {
+            id: null, // SQLite id ausente — updates de SQLite serão pulados
+            status: remoto.nota.status,
+            numero_nfse: remoto.nota.numero_nfse,
+            codigo_verificacao: null,
+            empresa_id: null,
+            conversa_id: null,
+            valor_total: remoto.nota.valor_servico,
+            referencia_supabase: remoto.nota.id,
+        };
+        conversa = remoto.whatsapp ? { whatsapp: remoto.whatsapp, id: null } : null;
+        empresa = remoto.empresa
+            ? {
+                id: remoto.empresa.id,
+                focus_token: process.env.FOCUS_NFE_ENV === "producao"
+                    ? remoto.empresa.focus_token_producao
+                    : remoto.empresa.focus_token_homologacao,
+                usa_nfse_nacional: !!remoto.empresa.usa_nfse_nacional,
+                razao_social: null,
+            }
+            : null;
+        logger.info({ referencia, whatsapp: !!conversa?.whatsapp }, "focus-webhook: fallback Supabase OK");
     }
 
     if (nota.status === "autorizado" || nota.status === "rejeitado" || nota.status === "cancelado") {
@@ -89,14 +122,12 @@ export async function handleFocusWebhook(body) {
 
     const novoStatus = statusFromPayload(body);
     logger.info(
-        { referencia, statusAnterior: nota.status, novoStatus, evento: body.evento },
+        { referencia, statusAnterior: nota.status, novoStatus, evento: body.evento, fonteRemota },
         "focus-webhook: processando callback"
     );
 
-    const conversa = nota.conversa_id ? findConversaById.get(nota.conversa_id) : null;
-    const empresa = findEmpresaById.get(nota.empresa_id);
     if (!empresa) {
-        logger.error({ referencia, empresaId: nota.empresa_id }, "focus-webhook: empresa não encontrada");
+        logger.error({ referencia }, "focus-webhook: empresa não encontrada");
         return { ok: false, reason: "empresa_nao_encontrada" };
     }
 
@@ -104,17 +135,19 @@ export async function handleFocusWebhook(body) {
         const numero = body.numero || nota.numero_nfse || "—";
         const codVerif = body.codigo_verificacao || nota.codigo_verificacao || null;
 
-        updateNotaStatus.run(
-            "autorizado",
-            numero,
-            codVerif,
-            body.url || null,
-            null,
-            null,
-            JSON.stringify(body).slice(0, 50_000),
-            "autorizado",
-            nota.id
-        );
+        if (nota.id) {
+            updateNotaStatus.run(
+                "autorizado",
+                numero,
+                codVerif,
+                body.url || null,
+                null,
+                null,
+                JSON.stringify(body).slice(0, 50_000),
+                "autorizado",
+                nota.id
+            );
+        }
         // Focus envia URL do PDF (ou da página do portal pra ABRASF municipal)
         // em `body.url` ou `body.url_danfse`. Persistimos no Supabase
         // (caminho_pdf) pra o frontend do Pac mostrar o botão "Ver PDF".
@@ -238,24 +271,26 @@ export async function handleFocusWebhook(body) {
                 }
             }
 
-            finalizarConversa.run("finalizada", conversa.id);
+            if (conversa.id) finalizarConversa.run("finalizada", conversa.id);
         }
         return { ok: true, status: "autorizado", numero };
     }
 
     if (novoStatus === "rejeitado" || novoStatus === "cancelado") {
         const motivo = body.mensagem || body.erros?.[0]?.mensagem || body.evento || "Sem detalhes";
-        updateNotaStatus.run(
-            novoStatus,
-            null,
-            null,
-            null,
-            null,
-            String(motivo).slice(0, 1000),
-            JSON.stringify(body).slice(0, 50_000),
-            novoStatus,
-            nota.id
-        );
+        if (nota.id) {
+            updateNotaStatus.run(
+                novoStatus,
+                null,
+                null,
+                null,
+                null,
+                String(motivo).slice(0, 1000),
+                JSON.stringify(body).slice(0, 50_000),
+                novoStatus,
+                nota.id
+            );
+        }
         await atualizarNotaResultado({ ref: referencia }, {
             status: novoStatus,
             erro: String(motivo),
@@ -269,7 +304,7 @@ export async function handleFocusWebhook(body) {
                 `⚠️ A prefeitura ${acao} a emissão:\n\n_${motivo}_\n\n` +
                 `Não esquenta — já chamei minha equipe técnica pra ver o que rolou. A gente resolve.`
             );
-            finalizarConversa.run("finalizada", conversa.id);
+            if (conversa.id) finalizarConversa.run("finalizada", conversa.id);
         }
         if (ADMIN_WHATSAPP) {
             await enviarTexto(

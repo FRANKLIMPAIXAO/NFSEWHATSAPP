@@ -167,3 +167,48 @@ export async function atualizarNotaResultado(ident, params) {
         );
     }
 }
+
+/**
+ * Busca a nota no Supabase por referência. Fallback do focus-webhook
+ * quando o SQLite local foi perdido (agent-nfse no EasyPanel reinicia
+ * com frequência e o SQLite é volátil).
+ *
+ * Retorna o row inteiro, incluindo conversa_id reconstruída via
+ * whatsapp_dono da empresa (pra mandar PDF de volta pro user certo).
+ */
+export async function buscarNotaPorRef(referencia) {
+    if (!isEnabled()) return null;
+    if (!referencia) return null;
+
+    try {
+        const { data: nota, error } = await supabase
+            .from("poupeja_nfse")
+            .select("id, ref, status, numero_nfse, chave_nfse, cnpj_prestador, nome_tomador, valor_servico, user_id, payload")
+            .eq("ref", referencia)
+            .maybeSingle();
+        if (error || !nota) return null;
+
+        // Pra mandar PDF no Zap, precisa do whatsapp do user. Busca direto
+        // na empresa emitente (whatsapp_dono) — mesmo número que iniciou
+        // a conversa do agent.
+        const cnpjLimpo = String(nota.cnpj_prestador || "").replace(/\D/g, "");
+        let whatsapp = null;
+        if (cnpjLimpo) {
+            const { data: emp } = await supabase
+                .from("poupeja_fiscal_emitentes")
+                .select("whatsapp_dono, focus_token_producao, focus_token_homologacao, usa_nfse_nacional, id")
+                .eq("user_id", nota.user_id)
+                .eq("cnpj", cnpjLimpo)
+                .maybeSingle();
+            whatsapp = emp?.whatsapp_dono || null;
+            return { nota, empresa: emp, whatsapp };
+        }
+        return { nota, empresa: null, whatsapp: null };
+    } catch (err) {
+        logger.warn(
+            { err: err.message, referencia },
+            "supabase-nota: erro buscando nota por ref"
+        );
+        return null;
+    }
+}
