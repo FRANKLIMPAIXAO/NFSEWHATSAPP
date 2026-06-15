@@ -14,7 +14,10 @@ const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",
     removeNSPrefix: true, // remove ns2:, nfse:, etc — fica só Tag
-    parseTagValue: true,
+    // parseTagValue:false → mantém valores como string (preserva zeros à
+    // esquerda de CNPJ tipo "01060996000193" que vira 1060996000193 quando
+    // convertido pra Number)
+    parseTagValue: false,
     parseAttributeValue: false,
     trimValues: true,
 });
@@ -106,6 +109,23 @@ function fmtDataHora(s) {
     const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
     if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
     return fmtData(s);
+}
+
+/**
+ * Decodifica entidades numéricas XML (&#xC3; → Ã, &#225; → á) e nomeadas
+ * comuns. Usado pra texto livre tipo OutrasInformacoes que vem com
+ * acentos escapados.
+ */
+function decodeEntidades(s) {
+    if (!s) return "";
+    return String(s)
+        .replace(/&#x([0-9A-Fa-f]+);/g, (_m, hex) => String.fromCodePoint(parseInt(hex, 16)))
+        .replace(/&#(\d+);/g, (_m, dec) => String.fromCodePoint(parseInt(dec, 10)))
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
 }
 
 function fmtCep(s) {
@@ -370,7 +390,8 @@ export async function gerarDanfseAbrasf(xmlString) {
             // ── Outras informações ────────────────────────────────────
             if (d.outrasInformacoes && d.outrasInformacoes.trim()) {
                 secaoTitulo(doc, left, pageW, "OUTRAS INFORMAÇÕES");
-                const texto = d.outrasInformacoes.replace(/\\s\\n/g, "\n").replace(/&#x[0-9A-F]+;/g, "");
+                const texto = decodeEntidades(d.outrasInformacoes)
+                    .replace(/\\s\\n/g, "\n");
                 const h = doc.heightOfString(texto, { width: pageW - 16, fontSize: 9 });
                 doc.rect(left, doc.y, pageW, h + 12).stroke();
                 doc.fontSize(9).font("Helvetica").fillColor("#000")
