@@ -45,6 +45,7 @@ import {
     baixarMidia,
 } from "../services/whatsapp.js";
 import { handleAgenda } from "./agenda.js";
+import { handleRelatorioFinanceiro } from "./financeiro-relatorio.js";
 import { handleFinanceiro } from "./financeiro.js";
 import { handleFinanceiroBoleto } from "./financeiro-boleto.js";
 import { handleFinanceiroTransacao } from "./financeiro-transacao.js";
@@ -375,6 +376,14 @@ async function _handleWebhookInner(evt) {
         if (intencao.intencao === "consultar_agenda") {
             await handleAgenda({ empresa, numero, texto: textoExtracao });
             // Cleanup arquivos temp (mídia visual)
+            for (const p of arquivosTemp) {
+                await fs.unlink(p).catch(() => {});
+            }
+            return;
+        }
+
+        if (intencao.intencao === "relatorio_financeiro") {
+            await handleRelatorioFinanceiro({ empresa, numero, texto: textoExtracao });
             for (const p of arquivosTemp) {
                 await fs.unlink(p).catch(() => {});
             }

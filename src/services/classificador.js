@@ -31,6 +31,7 @@ const INTENCOES_VALIDAS = new Set([
     "emitir_nfse",
     "registrar_financeiro",
     "consultar_agenda",
+    "relatorio_financeiro",
     "duvida_geral",
 ]);
 

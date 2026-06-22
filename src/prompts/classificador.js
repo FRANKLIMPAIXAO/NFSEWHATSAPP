@@ -40,7 +40,17 @@ CATEGORIAS POSSÍVEIS (escolha exatamente 1):
    - "tenho que pagar IPVA esse mês"
    Subtipos: "consulta" | "criar_compromisso" | "concluir_compromisso"
 
-4. "duvida_geral" — saudação, pergunta sobre o sistema, conversa solta, OU
+4. "relatorio_financeiro" — pedido de resumo/relatório/extrato financeiro.
+   Sinais típicos:
+   - "relatório", "relatório do mês", "relatório do mês passado", "relatório da semana"
+   - "resumo financeiro", "balanço", "fluxo de caixa"
+   - "quanto gastei", "quanto recebi", "quanto ganhei esse mês"
+   - "como tô financeiramente", "fechamento do mês"
+   - "meu extrato" (do PacNoBolso — sem foto/PDF, é pedido de relatório,
+     NÃO confunde com extrato bancário que vem com imagem/PDF)
+   Subtipos: "mes_corrente" (default), "mes_passado", "semana", "hoje", "ontem", "ano"
+
+5. "duvida_geral" — saudação, pergunta sobre o sistema, conversa solta, OU
    mensagem ambígua que não dá pra classificar com confiança.
    Sinais: "oi", "bom dia", "ajuda", "como funciona", "quanto custa", "obrigado"
    Quando NÃO TIVER CERTEZA (confianca < 0.6), classifique como "duvida_geral" —
@@ -55,13 +65,17 @@ REGRAS IMPORTANTES:
 - ORÇAMENTO ≠ BOLETO. Orçamento descreve serviço que a empresa PRESTOU
   (cobra o cliente) → "emitir_nfse". Boleto é cobrança que CHEGA pra empresa
   pagar → "registrar_financeiro".
+- EXTRATO BANCÁRIO (foto/PDF com várias linhas de movimentação) é
+  "registrar_financeiro" subtipo "extrato_bancario". Texto "meu extrato"
+  ou "relatório" SEM imagem/PDF é "relatorio_financeiro".
 - "PAGUEI" = financeiro. "RECEBI" = financeiro. "EMITE/FATURA" = nfse.
+- "RELATÓRIO" / "RESUMO" / "QUANTO GASTEI" sem imagem = relatorio_financeiro.
 - Mensagens curtas tipo "oi", "?", emoji solto → "duvida_geral".
 
 DEVOLVA APENAS o JSON, sem markdown, sem comentários, sem texto extra:
 
 {
-  "intencao": "emitir_nfse" | "registrar_financeiro" | "consultar_agenda" | "duvida_geral",
+  "intencao": "emitir_nfse" | "registrar_financeiro" | "consultar_agenda" | "relatorio_financeiro" | "duvida_geral",
   "subtipo": "string conforme categoria acima",
   "confianca": 0.0 a 1.0,
   "resumo": "1 frase do que entendeu da mensagem",
