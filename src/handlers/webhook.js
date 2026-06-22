@@ -477,10 +477,11 @@ async function _handleWebhookInner(evt) {
             const nomeEmpresa = empresa.nome_fantasia || empresa.razao_social || empresa.nome || "chefe";
             await enviarTexto(
                 numero,
-                `👋 Oi, ${nomeEmpresa}! Pra organizar a *${nomeEmpresa}*, eu cuido de 3 frentes:\n\n` +
+                `👋 Oi, ${nomeEmpresa}! Pra organizar a *${nomeEmpresa}*, eu cuido de 4 frentes:\n\n` +
                 `📄 *Nota fiscal* — manda áudio, foto do orçamento ou descreve o serviço que eu emito.\n` +
                 `📅 *Agenda* — *"o que tenho hoje"*, *"lembra do aluguel dia 5"*, *"já paguei o IPVA"*.\n` +
-                `💰 *Financeiro* — foto de boleto, pix recebido, extrato — eu registro tudo.\n\n` +
+                `💰 *Financeiro* — foto de boleto, pix recebido, extrato — eu registro tudo.\n` +
+                `📊 *Relatório* — *"relatório do mês"*, *"quanto gastei essa semana"*, *"balanço"*.\n\n` +
                 `Manda aí o que precisa. 🚀`
             );
             for (const p of arquivosTemp) {
