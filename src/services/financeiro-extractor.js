@@ -80,11 +80,18 @@ Extraia:
 - date: data ISO YYYY-MM-DD. Default hoje se não mencionar.
 - categoria_sugerida: uma destas EXATAS (case-sensitive):
    * "Receita" — qualquer income
-   * "Alimentação" — mercado, restaurante, padaria, iFood
-   * "Transporte" — combustível, Uber, ônibus, posto
-   * "Moradia" — aluguel, energia, água, internet, condomínio
-   * "Impostos" — DAS, DARF, DARE, IPVA, IPTU
+   * "Alimentação" — mercado, supermercado, restaurante, padaria, iFood, lanchonete, açougue, hortifruti, atacarejo de comida (Assaí, Atacadão se claramente mercado)
+   * "Saúde" — DROGARIA, FARMÁCIA, drogasil, raia, pague-menos, ultrafarma, clínica, médico, dentista, exame, plano de saúde, hospital, ótica, medicamento
+   * "Transporte" — combustível, gasolina, álcool, posto, Uber, 99, taxi, ônibus, metrô, estacionamento, IPVA, oficina, mecânica, pedágio
+   * "Moradia" — aluguel, energia/luz (Enel, Equatorial), água (Saneago), internet, telefone, condomínio, IPTU
+   * "Impostos" — DAS, DARF, DARE, GPS, INSS, FGTS, ISS
+   * "Lazer" — vestuário, salão, beleza, academia, presente, cinema, streaming (Netflix, Spotify), passeio
    * "Outros" — qualquer outro
+
+REGRAS DE DESEMPATE (importante):
+- Nome com "DROGARIA" ou "FARMÁCIA" SEMPRE vira "Saúde", MESMO se o estabelecimento tiver "Atacadão" / "Atacarejo" no nome. Ex: "Atacadão Drogarias" → "Saúde".
+- Posto Shell / BR / Ipiranga → "Transporte".
+- Nubank / Inter / Bradesco / banco sem outra pista → "Outros".
 
 REGRAS:
 - Se faltar valor OU descrição (críticos), retorne {status: "incomplete", campos_faltantes: [...], pergunta: "Faltou X — me manda?"}.
@@ -98,7 +105,7 @@ DEVOLVA APENAS JSON, sem markdown:
   "amount": 1234.56,
   "description": "...",
   "date": "YYYY-MM-DD",
-  "categoria_sugerida": "Receita" | "Alimentação" | "Transporte" | "Moradia" | "Impostos" | "Outros",
+  "categoria_sugerida": "Receita" | "Alimentação" | "Saúde" | "Transporte" | "Moradia" | "Impostos" | "Lazer" | "Outros",
   "campos_faltantes": ["..."],
   "pergunta": "string",
   "motivo": "string"
@@ -275,10 +282,14 @@ Extraia TODAS as transações listadas no extrato.
 REGRAS DE CLASSIFICAÇÃO (use APENAS estas categorias EXATAS):
 - "Receita" — Pix recebido, transferência recebida, depósito, salário
 - "Alimentação" — padaria, mercado, supermercado, restaurante, iFood, lanchonete (qualquer nome que indique comida)
-- "Transporte" — posto, combustível, Uber, 99, ônibus, gasolina
+- "Saúde" — DROGARIA, FARMÁCIA, drogasil, raia, pague-menos, ultrafarma, clínica, médico, dentista, plano de saúde, hospital, ótica, medicamento
+- "Transporte" — posto, combustível, Uber, 99, ônibus, gasolina, pedágio, estacionamento, IPVA, oficina
 - "Moradia" — energia, luz, água, internet, aluguel, condomínio, IPTU residencial
-- "Impostos" — DARE, DARF, GPS, DAS, IPVA, ICMS
+- "Impostos" — DARE, DARF, GPS, DAS, IPVA, ICMS, INSS, FGTS, ISS
+- "Lazer" — vestuário, salão, academia, cinema, streaming (Netflix, Spotify), passeio
 - "Outros" — qualquer outro caso
+
+REGRA DE DESEMPATE: nome com "DROGARIA" ou "FARMÁCIA" SEMPRE vira "Saúde", mesmo se tiver "Atacadão" ou "Atacarejo" no nome.
 
 TIPO (C = crédito/entrada, D = débito/saída):
 - Pix RECEBIDO, transferência RECEBIDA → C (Receita)
@@ -298,7 +309,7 @@ FORMATO DE SAÍDA (JSON puro, sem markdown):
       "descricao": "texto literal do extrato, curto",
       "valor": 1234.56,
       "tipo": "C" | "D",
-      "categoria": "Receita" | "Alimentação" | "Transporte" | "Moradia" | "Impostos" | "Outros"
+      "categoria": "Receita" | "Alimentação" | "Saúde" | "Transporte" | "Moradia" | "Impostos" | "Lazer" | "Outros"
     }
   ]
 }

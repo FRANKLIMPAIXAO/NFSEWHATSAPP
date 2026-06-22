@@ -123,27 +123,66 @@ async function buscarCompromissosResumo(userId, hojeISO) {
 }
 
 /**
+ * Busca contas a pagar do MÊS CORRENTE que ainda estão pendentes
+ * (status = 'pending'). Inclui vencidas + futuras do mesmo mês.
+ * Não inclui meses futuros — usuário pediu explicitamente "só do mês".
+ */
+async function buscarPayablesDoMes(userId, hojeISO) {
+    const inicioMes = hojeISO.slice(0, 8) + "01";
+    const ano = parseInt(hojeISO.slice(0, 4), 10);
+    const mes = parseInt(hojeISO.slice(5, 7), 10);
+    // Primeiro dia do mês seguinte (limite exclusivo)
+    const proxAno = mes === 12 ? ano + 1 : ano;
+    const proxMes = mes === 12 ? 1 : mes + 1;
+    const fimMes = `${proxAno}-${String(proxMes).padStart(2, "0")}-01`;
+
+    const { data, error } = await supabase
+        .from("poupeja_payables")
+        .select("id, description, amount, due_date, entity_name, status")
+        .eq("user_id", userId)
+        .eq("status", "pending")
+        .gte("due_date", inicioMes)
+        .lt("due_date", fimMes)
+        .order("due_date", { ascending: true })
+        .limit(50);
+
+    if (error) {
+        logger.warn({ err: error.message, userId }, "buscarPayablesDoMes: erro");
+        return [];
+    }
+    return data || [];
+}
+
+/**
  * Monta a mensagem do resumo matinal. Retorna null se não vale a pena mandar
  * (zero compromissos = não polui o WhatsApp do cliente).
  */
-function montarResumo({ nomeApresentacao, compromissos, hojeISO }) {
-    if (!compromissos || compromissos.length === 0) {
+function montarResumo({ nomeApresentacao, compromissos, payables, hojeISO }) {
+    const temCompromissos = compromissos && compromissos.length > 0;
+    const temPayables = payables && payables.length > 0;
+    if (!temCompromissos && !temPayables) {
         return null; // nada a comunicar, pula
     }
 
     const limite7dISO = dataMaisDias(hojeISO, 7);
-    const hoje = compromissos.filter((c) => c.data_proxima === hojeISO);
-    const atrasados = compromissos.filter((c) => c.data_proxima < hojeISO);
-    const proximos = compromissos.filter(
+    const listaCompromissos = compromissos || [];
+    const hoje = listaCompromissos.filter((c) => c.data_proxima === hojeISO);
+    const atrasados = listaCompromissos.filter((c) => c.data_proxima < hojeISO);
+    const proximos = listaCompromissos.filter(
         (c) => c.data_proxima > hojeISO && c.data_proxima <= limite7dISO
     );
 
     const totalPagarHoje = hoje
         .filter((c) => c.categoria === "pagamento" && c.valor != null)
         .reduce((s, c) => s + Number(c.valor || 0), 0);
-    const totalPagarSemana = compromissos
+    const totalPagarSemana = listaCompromissos
         .filter((c) => c.categoria === "pagamento" && c.valor != null && c.data_proxima >= hojeISO)
         .reduce((s, c) => s + Number(c.valor || 0), 0);
+
+    const listaPayables = payables || [];
+    const payablesVencidas = listaPayables.filter((p) => p.due_date < hojeISO);
+    const payablesAVencer = listaPayables.filter((p) => p.due_date >= hojeISO);
+    const totalPayablesMes = listaPayables.reduce((s, p) => s + Number(p.amount || 0), 0);
 
     const partes = [];
     partes.push(`☀️ Bom dia, *${nomeApresentacao}*!`);
@@ -187,6 +226,28 @@ function montarResumo({ nomeApresentacao, compromissos, hojeISO }) {
         if (totalPagarSemana > 0) {
             partes.push(`💰 Total a pagar essa semana: *${fmtValor(totalPagarSemana)}*`);
         }
+        partes.push("");
+    }
+
+    // Bloco de contas a pagar do MÊS — substitui o antigo cron n8n que mandava
+    // 1 mensagem por parcela. Agora vai consolidado aqui, 1x por dia.
+    if (listaPayables.length > 0) {
+        partes.push(`💳 *Contas a pagar do mês* (${listaPayables.length}):`);
+        if (payablesVencidas.length > 0) {
+            for (const p of payablesVencidas.slice(0, 5)) {
+                const fornecedor = p.entity_name ? ` — ${p.entity_name}` : "";
+                partes.push(`🔴 ${p.description}${fornecedor} — venceu ${fmtDataBR(p.due_date)} — ${fmtValor(p.amount)}`);
+            }
+        }
+        for (const p of payablesAVencer.slice(0, 8)) {
+            const fornecedor = p.entity_name ? ` — ${p.entity_name}` : "";
+            partes.push(`• ${fmtDataBR(p.due_date)} — ${p.description}${fornecedor} — ${fmtValor(p.amount)}`);
+        }
+        const restante = payablesAVencer.length - 8;
+        if (restante > 0) {
+            partes.push(`_…e mais ${restante} no mês_`);
+        }
+        partes.push(`💰 Total do mês: *${fmtValor(totalPayablesMes)}*`);
         partes.push("");
     }
 
@@ -234,11 +295,15 @@ export async function executarCicloResumoMatinal() {
         }
 
         try {
-            const compromissos = await buscarCompromissosResumo(u.user_id, hojeISO);
+            const [compromissos, payables] = await Promise.all([
+                buscarCompromissosResumo(u.user_id, hojeISO),
+                buscarPayablesDoMes(u.user_id, hojeISO),
+            ]);
             const nomeApresentacao = u.nome_fantasia || u.nome || "chefe";
             const msg = montarResumo({
                 nomeApresentacao,
                 compromissos,
+                payables,
                 hojeISO,
             });
 
