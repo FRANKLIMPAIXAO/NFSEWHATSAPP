@@ -24,8 +24,34 @@ import { enviarPdf, enviarTexto } from "../services/whatsapp.js";
 import { DanfeService } from "nfse-nacional";
 import { gerarDanfseAbrasf, detectarFormatoXml } from "../services/danfse-abrasf.js";
 import { logger } from "../utils/logger.js";
+import { supabase, isEnabled } from "../supabase.js";
 
 const ADMIN_WHATSAPP = process.env.ADMIN_WHATSAPP;
+
+/**
+ * Audit log estruturado de cada etapa do callback Focus. Sem isso ficamos
+ * cegos pra debugar quando o webhook chega mas o PDF não sai no Zap.
+ * Tabela poupeja_fiscal_audit (estendida na sessão 16/06 pra aceitar cert
+ * e webhook). user_id resolvido pelo user_id da nota; empresa_id quando dá.
+ */
+async function audit({ userId, empresaId, referencia, acao, status, detalhe }) {
+    if (!isEnabled()) return;
+    if (!userId) return; // schema exige user_id (NOT NULL com FK)
+    try {
+        const { error } = await supabase.from("poupeja_fiscal_audit").insert({
+            user_id: userId,
+            tipo_doc: "webhook",
+            acao,
+            ref: referencia || null,
+            status,
+            detalhe: detalhe ? String(detalhe).slice(0, 1000) : null,
+            empresa_id: empresaId || null,
+        });
+        if (error) logger.warn({ err: error.message }, "audit webhook: falha");
+    } catch (e) {
+        logger.warn({ err: e.message }, "audit webhook: exceção");
+    }
+}
 
 // Status canônico (masculino) — alinha com check constraint do Supabase
 // (poupeja_nfse_status_check) e formato nativo da Focus.
@@ -72,6 +98,25 @@ export async function handleFocusWebhook(body) {
         logger.warn({ body }, "focus-webhook: payload sem ref");
         return { ok: false, reason: "no_ref" };
     }
+
+    // Resolve user_id + empresa_id já no início pro audit log.
+    // Best-effort: se o Supabase tiver problema, segue sem audit (não bloqueia).
+    let auditUserId = null;
+    let auditEmpresaId = null;
+    try {
+        const r = await buscarNotaPorRef(referencia);
+        auditUserId = r?.nota?.user_id || null;
+        auditEmpresaId = r?.empresa?.id || null;
+    } catch (_) {}
+
+    await audit({
+        userId: auditUserId,
+        empresaId: auditEmpresaId,
+        referencia,
+        acao: "webhook_received",
+        status: body.status || body.evento || "desconhecido",
+        detalhe: `numero=${body.numero || "-"} | url=${body.url ? "sim" : "não"}`,
+    });
 
     // Tenta SQLite local primeiro (rápido + pode ter conversa_id).
     // Fallback: Supabase quando o agent reiniciou e perdeu o registro.
@@ -245,7 +290,7 @@ export async function handleFocusWebhook(body) {
 
                     if (pdfBytes) {
                         await enviarPdf(
-                            conversa.whatsapp,
+                            destinoWhatsapp,
                             pdfBytes,
                             `NFS-e-${numero}.pdf`,
                             formatarMensagemNotaEmitida(nota, numero)
@@ -255,6 +300,14 @@ export async function handleFocusWebhook(body) {
                             { referencia, formato, tamanho: pdfBytes.length },
                             "focus-webhook: DANFSe local gerado e enviado"
                         );
+                        await audit({
+                            userId: auditUserId,
+                            empresaId: auditEmpresaId,
+                            referencia,
+                            acao: "pdf_send_success",
+                            status: "sucesso",
+                            detalhe: `formato=${formato} | destino=${destinoWhatsapp} | tamanho=${pdfBytes.length}b`,
+                        });
                     } else {
                         logger.warn(
                             { referencia, formato },
@@ -266,6 +319,14 @@ export async function handleFocusWebhook(body) {
                         { err: err.message, referencia },
                         "focus-webhook: falha gerando DANFSe local, caindo pro link"
                     );
+                    await audit({
+                        userId: auditUserId,
+                        empresaId: auditEmpresaId,
+                        referencia,
+                        acao: "pdf_send_failure",
+                        status: "erro",
+                        detalhe: `etapa=danfse_local | ${err.message}`,
+                    });
                 }
             }
 
@@ -292,6 +353,14 @@ export async function handleFocusWebhook(body) {
                 { referencia },
                 "focus-webhook: sem destino WhatsApp (nem conversa nem whatsapp_dono) — PDF não foi enviado"
             );
+            await audit({
+                userId: auditUserId,
+                empresaId: auditEmpresaId,
+                referencia,
+                acao: "pdf_send_no_destination",
+                status: "erro",
+                detalhe: "conversa.whatsapp e empresa.whatsapp_dono ambos vazios",
+            });
         }
         return { ok: true, status: "autorizado", numero, enviado: !!destinoWhatsapp };
     }
