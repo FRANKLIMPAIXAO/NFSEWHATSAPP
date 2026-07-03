@@ -68,9 +68,22 @@ REGRAS IMPORTANTES:
 - EXTRATO BANCÁRIO (foto/PDF com várias linhas de movimentação) é
   "registrar_financeiro" subtipo "extrato_bancario". Texto "meu extrato"
   ou "relatório" SEM imagem/PDF é "relatorio_financeiro".
-- "PAGUEI" = financeiro. "RECEBI" = financeiro. "EMITE/FATURA" = nfse.
+- "JÁ PAGUEI [nome de coisa que costuma ter lembrete]" (ex: "já paguei
+  o aluguel", "já paguei o IPVA", "paguei o DAS") = **consultar_agenda**
+  subtipo "concluir_compromisso". Empresário está CONCLUINDO um
+  lembrete ativo. NÃO é novo registro financeiro.
+- "PAGUEI R$ X pro [fornecedor]" (com VALOR e/ou fornecedor externo)
+  = "registrar_financeiro". Novo registro de despesa.
+- "RECEBI R$ X do [cliente]" = "registrar_financeiro".
+- "EMITE/FATURA" = nfse.
 - "RELATÓRIO" / "RESUMO" / "QUANTO GASTEI" sem imagem = relatorio_financeiro.
 - Mensagens curtas tipo "oi", "?", emoji solto → "duvida_geral".
+
+REGRA DE DESEMPATE "PAGUEI":
+  Se tem VALOR explícito ("paguei 500") → registrar_financeiro
+  Se tem "JÁ" + coisa recorrente (aluguel, IPVA, DAS, cert, luz, água,
+  internet, condomínio) SEM valor → consultar_agenda / concluir_compromisso
+  Em dúvida → consultar_agenda (empresário provavelmente quer fechar lembrete).
 
 DEVOLVA APENAS o JSON, sem markdown, sem comentários, sem texto extra:
 
