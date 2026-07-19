@@ -259,13 +259,13 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
     const optanteSimples = empresa.regime === "simples_nacional";
 
     // codigo_tributacao_nacional_iss: 6 dígitos da Tabela CGSN.
-    // Ex: 171901 = Contabilidade (nota Pac #267).
-    const codTribNacional = Number(
-        codigoCGSN6Digitos(
-            servico.codigo_tributacao_nacional ||
-                empresa.codigo_tributacao_nacional ||
-                servico.codigo_lc116
-        )
+    // Ex: 171901 = Contabilidade (nota Pac #267), 080201 = Instrução (Franklim MEI).
+    // ATENÇÃO: mantém STRING. Number("080201") = 80201 (perde o zero à esquerda),
+    // Focus rejeita com "Item Lista Serviço com valor inválido — 6 dígitos numéricos".
+    const codTribNacional = codigoCGSN6Digitos(
+        servico.codigo_tributacao_nacional ||
+            empresa.codigo_tributacao_nacional ||
+            servico.codigo_lc116
     );
 
     // Numero DPS — Aparecida ISSNET v7.5.3.0 exige sequencial (E090) e máx 5 dígitos
@@ -321,7 +321,7 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         regime_tributario_simples_nacional: optanteSimples ? "1" : undefined,
         regime_especial_tributacao: "0", // Nenhum (Simples Nacional NÃO é regime especial)
         codigo_municipio_prestacao: Number(empresa.municipio_codigo),
-        codigo_tributacao_nacional_iss: Number(codTribNacional),
+        codigo_tributacao_nacional_iss: codTribNacional,
         codigo_tributacao_municipal_iss: codTribMunicipal || undefined,
         descricao_servico: normalizarDiscriminacao(servico.descricao),
         valor_servico: Number(servico.valor_total),
