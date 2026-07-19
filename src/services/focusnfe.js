@@ -395,6 +395,25 @@ export async function emitirNFSe(params) {
         "emitindo NFS-e na Focus"
     );
 
+    // Debug: loga campos-chave do payload pra diagnosticar rejeições
+    // de schema. Sem PII sensível — só códigos e valores públicos.
+    if (padrao === "nacional") {
+        logger.info(
+            {
+                referencia,
+                cServTribNac: payload.codigo_tributacao_nacional_iss,
+                cServTribNac_type: typeof payload.codigo_tributacao_nacional_iss,
+                cTribMun: payload.codigo_tributacao_municipal_iss,
+                cNBS: payload.codigo_nbs,
+                cClassTrib: payload.ibs_cbs_classificacao_tributaria,
+                cIndOp: payload.codigo_indicador_operacao,
+                serieDps: payload.serie_dps,
+                numeroDps: payload.numero_dps,
+            },
+            "payload Nacional — códigos-chave"
+        );
+    }
+
     const t0 = Date.now();
     const result = await focusFetch(
         "POST",
