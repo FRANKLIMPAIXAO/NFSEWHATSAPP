@@ -316,7 +316,10 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         inscricao_municipal_prestador: empresa.municipio_no_cnc
             ? empresa.inscricao_municipal || undefined
             : undefined,
-        razao_social_prestador: empresa.razao_social || undefined,
+        // razao_social_prestador: NÃO enviar quando emitente_dps="1" (prestador
+        // é o próprio emitente). SEFIN pega do cadastro CNPJ. Envio causa E0121.
+        // Só faria sentido enviar quando emitente_dps for "2" (tomador emite)
+        // ou "3" (intermediário emite) — cenários que não usamos hoje.
         // opSimpNac Nacional: 1=Não Optante | 2=MEI | 3=ME/EPP optante.
         // MEI (regime=4 Focus) tem categoria própria — antes era "1" (não optante)
         // por bug, causando E0039 em Aparecida ("município não parametrizado").
