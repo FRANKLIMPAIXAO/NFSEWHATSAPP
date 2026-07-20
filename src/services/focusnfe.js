@@ -257,6 +257,7 @@ function montarPayloadMunicipal({ referencia, empresa, tomador, servico, compete
 
 function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
     const optanteSimples = empresa.regime === "simples_nacional";
+    const isMei = empresa.regime === "mei";
 
     // codigo_tributacao_nacional_iss: 6 dígitos da Tabela CGSN.
     // Ex: 171901 = Contabilidade (nota Pac #267), 080201 = Instrução (Franklim MEI).
@@ -316,9 +317,14 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
             ? empresa.inscricao_municipal || undefined
             : undefined,
         razao_social_prestador: empresa.razao_social || undefined,
-        codigo_opcao_simples_nacional: optanteSimples ? "3" : "1", // 3=ME/EPP, 1=Não Optante
-        // regime_tributario_simples_nacional: 1=federal+municipal via SN (default ME/EPP)
-        regime_tributario_simples_nacional: optanteSimples ? "1" : undefined,
+        // opSimpNac Nacional: 1=Não Optante | 2=MEI | 3=ME/EPP optante.
+        // MEI (regime=4 Focus) tem categoria própria — antes era "1" (não optante)
+        // por bug, causando E0039 em Aparecida ("município não parametrizado").
+        // MEI usa SNP-e via nfse.gov.br mesmo em municípios ABRASF.
+        codigo_opcao_simples_nacional: isMei ? "2" : (optanteSimples ? "3" : "1"),
+        // regime_tributario_simples_nacional: só pra ME/EPP (opSimpNac=3).
+        // MEI (opSimpNac=2) não usa esse campo — tributação vem da DAS-MEI direto.
+        regime_tributario_simples_nacional: (optanteSimples && !isMei) ? "1" : undefined,
         regime_especial_tributacao: "0", // Nenhum (Simples Nacional NÃO é regime especial)
         codigo_municipio_prestacao: Number(empresa.municipio_codigo),
         codigo_tributacao_nacional_iss: codTribNacional,
@@ -333,8 +339,9 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         indicador_destinatario: "0", // tomador = destinatário
         codigo_indicador_operacao: empresa.cind_op_padrao || "030101",
         // IBS/CBS — Simples: CST=200, cClassTrib=200052 (DAS paga à parte)
-        ibs_cbs_situacao_tributaria: optanteSimples ? "200" : undefined,
-        ibs_cbs_classificacao_tributaria: optanteSimples ? "200052" : undefined,
+        // IBS/CBS: MEI é imune (mesma regra do Simples Nacional).
+        ibs_cbs_situacao_tributaria: (optanteSimples || isMei) ? "200" : undefined,
+        ibs_cbs_classificacao_tributaria: (optanteSimples || isMei) ? "200052" : undefined,
         // Lei da Transparência (Lei 12.741) — Opção C (Simples Nacional):
         // percentual_total_tributos_simples_nacional. Pra HC consultoria
         // Anexo III, alíquota efetiva ~6% (inicio da faixa).
