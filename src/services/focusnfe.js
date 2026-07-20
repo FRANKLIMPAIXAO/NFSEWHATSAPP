@@ -285,6 +285,16 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
 
     const dataEmissao = agoraBrtIso();
 
+    // Clamp competência pra nunca ser posterior à data de emissão.
+    // SEFIN rejeita com "A data de competência informada na DPS não pode
+    // ser posterior à data de emissão (dhEmi) da DPS." — extractor LLM
+    // e formulário podem enviar competência futura por engano (ex: cliente
+    // digita "julho" no dia 19 mas o form envia 2026-07-31).
+    const hojeYmd = dataEmissao.slice(0, 10);
+    const competenciaSafe = (typeof competencia === "string" && competencia > hojeYmd)
+        ? hojeYmd
+        : competencia;
+
     // codigo_tributacao_municipal_iss: XSD Nacional rev. 17/03/2026 exige
     // EXATAMENTE 3 dígitos (pattern `[0-9]{3}`). Probe Focus em 20/05/2026:
     //   "33:0: ERROR: cTribMun: '6920601' is not accepted by pattern '[0-9]{3}'."
@@ -307,7 +317,7 @@ function montarPayloadNacional({ empresa, tomador, servico, competencia }) {
         data_emissao: dataEmissao,
         serie_dps: serieDps,
         numero_dps: numeroDps,
-        data_competencia: competencia,
+        data_competencia: competenciaSafe,
         emitente_dps: "1", // Prestador
         codigo_municipio_emissora: Number(empresa.municipio_codigo),
         cnpj_prestador: empresa.cnpj,
